@@ -1,7 +1,5 @@
 /*
 Package compiler aids with compiling your Go binaries efficiently and in a consistent way.
-
-Vendored from github.com/circleci/backplane-go/releases/compiler@v0.52.32099.
 */
 package compiler
 

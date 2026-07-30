@@ -1,7 +1,5 @@
 /*
 Package releaser aids with publishing your Go binaries efficiently and in a consistent way.
-
-Vendored from github.com/circleci/backplane-go/releases/releaser@v0.52.32099.
 */
 //nolint:forbidigo // Whilst we don't expect o11y wired in, we use prints for debugging
 package releaser

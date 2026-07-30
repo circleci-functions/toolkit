@@ -1,7 +1,5 @@
 /*
 Package closer contains a helper function for not losing deferred errors
-
-Vendored from github.com/circleci/backplane-go/closer@v0.52.32099.
 */
 package closer
 

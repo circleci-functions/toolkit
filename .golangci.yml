@@ -15,8 +15,8 @@ linters:
       rules:
         main:
           deny:
-            - pkg: log
-              desc: use github.com/circleci/ex/o11y or slog instead
+            - pkg: ^log$
+              desc: use log/slog instead
             - pkg: gotest.tools/assert
               desc: use gotest.tools/v3/assert instead
             - pkg: gotest.tools/skip

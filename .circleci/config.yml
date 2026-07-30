@@ -1,15 +1,11 @@
 version: 2.1
 
-orbs:
-  toolkit: https://raw.githubusercontent.com/circleci-functions/toolkit/refs/heads/main/orbs/toolkit.yml
-
 jobs:
   test:
     docker:
       - image: cimg/go:1.26
     steps:
       - checkout
-      - toolkit/private-mod-init
       - restore_cache:
           keys:
             - toolkit-go-{{ checksum "go.sum" }}-
@@ -24,5 +20,4 @@ jobs:
 workflows:
   test:
     jobs:
-      - test:
-          context: [github-readonly]
+      - test

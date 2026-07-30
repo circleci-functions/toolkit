@@ -1,0 +1,28 @@
+version: 2.1
+
+orbs:
+  bp-go: https://raw.githubusercontent.com/circleci/backplane-cicd/refs/heads/main/orbs/go.yml
+
+jobs:
+  test:
+    docker:
+      - image: cimg/go:1.26
+    steps:
+      - checkout
+      - bp-go/private-mod-init
+      - restore_cache:
+          keys:
+            - toolkit-go-{{ checksum "go.sum" }}-
+            - toolkit-go-
+      - run: task ci
+      - save_cache:
+          key: toolkit-go-{{ checksum "go.sum" }}-{{ epoch }}
+          paths:
+            - ~/.cache/go-build
+            - ~/go/pkg/mod
+
+workflows:
+  test:
+    jobs:
+      - test:
+          context: [github-readonly]

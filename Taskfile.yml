@@ -1,0 +1,39 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format Go code (gofmt + goimports)
+    cmds:
+      - go tool golangci-lint fmt
+
+  lint:
+    desc: Lint Go code (includes go vet via golangci-lint)
+    cmds:
+      - go tool golangci-lint run ./...
+
+  test:
+    desc: Run unit tests (hermetic, no network)
+    cmds:
+      - go tool gotestsum -- ./...
+
+  tidy:
+    desc: Tidy go.mod / go.sum
+    cmds:
+      - go mod tidy
+
+  lint-mod:
+    desc: Check go.mod / go.sum are tidy
+    deps: [tidy]
+    cmds:
+      - git diff --exit-code -- go.mod go.sum
+
+  ci:
+    desc: Run everything CI runs (lint + test)
+    cmds:
+      - task: lint
+      - task: test

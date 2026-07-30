@@ -24,11 +24,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/circleci/backplane-go/releases/compiler"
-	"github.com/circleci/backplane-go/releases/releaser"
 	"go.yaml.in/yaml/v4"
 
+	"github.com/circleci-functions/toolkit/compiler"
 	"github.com/circleci-functions/toolkit/functionyaml"
+	"github.com/circleci-functions/toolkit/releaser"
 )
 
 // defaultPlatforms matches libsubcmd's subcommand matrix — the platforms

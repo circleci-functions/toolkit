@@ -9,7 +9,7 @@ type spanConfig struct {
 type SpanOpt func(spanConfig) spanConfig
 
 // WithSpanKind sets the SpanKind of a Span.
-// This is generally expected to be used by other backplane-go packages, rather than application code
+// This is generally expected to be used by other toolkit packages, rather than application code
 func WithSpanKind(kind SpanKind) SpanOpt {
 	return func(cfg spanConfig) spanConfig {
 		cfg.kind = kind

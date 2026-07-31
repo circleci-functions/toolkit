@@ -40,7 +40,7 @@ type Reporter interface {
 	// panics are reported to the reporter. Panics after reporting. Only
 	// use if this is the last chance to report the panic (like in main)
 	// and the panic is not already reported via automatic handling (if
-	// you arent using a backplane application).
+	// you arent using a managed application).
 	//
 	//	func main() {
 	//  ...
@@ -73,7 +73,7 @@ type Reporter interface {
 	//	  ...
 	//	}
 	//
-	// The opts are generally expected to be used by other backplane-go packages, rather than application code.
+	// The opts are generally expected to be used by other toolkit packages, rather than application code.
 	StartSpan(ctx context.Context, spanName string, opts ...SpanOpt) (context.Context, SpanEndFunc)
 	// SetSpanAttribute retrieves a span from the given context and sets string attributes on the span.
 	SetSpanAttribute(ctx context.Context, k string, v any)

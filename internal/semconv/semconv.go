@@ -1,4 +1,4 @@
-// Package semconv contains the standard attributes and helpers for backplane tooling.
+// Package semconv contains the standard attributes and helpers for telemetry tooling.
 package semconv
 
 import (
@@ -21,7 +21,7 @@ const (
 	clientName = "backplane.client.name"
 
 	ErrorType   = string(semconv.ErrorTypeKey)
-	ErrorDetail = "error.detail" // not part of semconv, but used by backplane typically to capture 'warning' detail
+	ErrorDetail = "error.detail" // not part of semconv, but typically used to capture 'warning' detail
 )
 
 type Timing struct {

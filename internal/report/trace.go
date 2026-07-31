@@ -88,7 +88,7 @@ func (l *LogToSpan) ExportSpan(span RSpan) {
 	for k, v := range span.Attrs {
 		// Avoid the info field duplicating any existing attributes during the transition to environments.
 		// This is intended to keep any explicit additions to the info field, and remove any that were automatically
-		// added, and any that were accidentally duplicated. This is intended to smooth the transition to Honeycomb
+		// added, and any that were accidentally duplicated. This is intended to smooth the transition
 		// environments.
 		if k == attr.InternalInfo {
 			vs, ok := v.(string)

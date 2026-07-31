@@ -1,4 +1,4 @@
-// Package httpcl provides an HTTP client instrumented with the backplane o11y package, it
+// Package httpcl provides an HTTP client instrumented with the observability package, it
 // includes resiliency behaviour such as configurable timeouts, retries, authentication
 // and connection pooling, with support for backing off when a 429 response code is seen.
 package httpcl

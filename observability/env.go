@@ -55,7 +55,7 @@ type ReporterConfig struct {
 
 	Warnings []error
 
-	ExecutionCustomTracer report.TraceEmitter // Used during the cut over from execution to backplane
+	ExecutionCustomTracer report.TraceEmitter // Custom trace emitter hook
 }
 
 // Resource describes the resource for this service.

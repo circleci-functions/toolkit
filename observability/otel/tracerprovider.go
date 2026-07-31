@@ -45,7 +45,7 @@ type TracerProviderConfig struct {
 	Batchers []SpanExporterConfig
 	Syncers  []SpanExporterConfig
 
-	ExecutionTempSpanProcessor sdktrace.SpanProcessor // Only in use by Execution
+	ExecutionTempSpanProcessor sdktrace.SpanProcessor // Optional span processor
 }
 
 type ResourceConfig struct {
@@ -59,7 +59,7 @@ type ResourceConfig struct {
 	K8sReplicaSet         string
 	K8sServiceAccountName string
 
-	// Temporary resource options whilst migrating execution to environments
+	// Temporary resource options
 	ExecutionServiceMode string
 	ExecutionDataSet     string
 }
@@ -239,7 +239,6 @@ func newResource(cfg ResourceConfig) *sdkresource.Resource {
 		attribute.String("k8s.service-account.name", cfg.K8sServiceAccountName),
 		attribute.Bool("meta.environments", cfg.UseEnvironments),
 
-		// TODO - drop these once execution is migrated to env
 		attribute.String("service.mode", cfg.ExecutionServiceMode),
 		attribute.String("x-honeycomb-dataset", cfg.ExecutionDataSet),
 	)

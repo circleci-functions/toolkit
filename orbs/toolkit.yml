@@ -12,4 +12,4 @@ commands:
       - run:
           name: Allow private module access
           command: |
-            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+            git config --global url."https://x-access-token:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"

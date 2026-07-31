@@ -27,10 +27,6 @@ type CompositeReporter struct {
 // CompositeReporterOption is a function that modifies a CompositeReporter
 type CompositeReporterOption func(r *CompositeReporter)
 
-type tracerErrorHandler struct {
-	reporter *CompositeReporter
-}
-
 // NewCompositeReporter creates a reporter from options. You likely want
 // NewReporter to create a production reporter.
 func NewCompositeReporter(opts ...CompositeReporterOption) *CompositeReporter {
@@ -293,12 +289,6 @@ func (r *CompositeReporter) SetSpanStatusError(ctx context.Context, desc string)
 // MakeSpanGolden makes the current span in the ctx a golden span and returns the ctx containing the golden span
 func (r *CompositeReporter) MakeSpanGolden(ctx context.Context) context.Context {
 	return r.tracer.MakeSpanGolden(ctx)
-}
-
-// Handle handles errors which are produced the tracer
-func (eh tracerErrorHandler) Handle(err error) {
-	ctx := context.Background()
-	eh.reporter.ErrorWithError(ctx, "error handled", err)
 }
 
 const resultKey = "result"

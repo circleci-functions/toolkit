@@ -1,14 +1,11 @@
 // Command release cross-compiles a single function and publishes it to the
-// circleci-functions S3 bucket using the same backplane-go compiler/releaser
-// machinery that ships build-agent's own subcommands. It's run from the root
-// of a function's own repo (one function per repo).
+// circleci-functions S3 bucket. It's run from the root of a function's own
+// repo (one function per repo).
 //
 // Each release publishes the gzipped binaries at
 // github.com/circleci-functions/<name>/<version>/<os>/<arch>/<name> plus
-// checksums.txt + release.txt, in the format the existing backplane-go
-// downloader (release.NewList) reads. CircleCI builds and publishes every
-// function, so the <os>/<arch> layout is normalized here and one downloader
-// serves binaries regardless of source language.
+// checksums.txt + release.txt. The <os>/<arch> layout is normalized here so
+// one downloader can serve binaries regardless of source language.
 package main
 
 import (
@@ -24,11 +21,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/circleci/backplane-go/releases/compiler"
-	"github.com/circleci/backplane-go/releases/releaser"
 	"go.yaml.in/yaml/v4"
 
+	"github.com/circleci-functions/toolkit/compiler"
 	"github.com/circleci-functions/toolkit/functionyaml"
+	"github.com/circleci-functions/toolkit/releaser"
 )
 
 // defaultPlatforms matches libsubcmd's subcommand matrix — the platforms

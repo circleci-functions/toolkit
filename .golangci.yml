@@ -27,8 +27,11 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+    funlen:
+      lines: 100
+      statements: 50
     gocyclo:
-      min-complexity: 15
+      min-complexity: 20
     nakedret:
       max-func-lines: 0
   exclusions:

@@ -28,8 +28,7 @@ import (
 	"github.com/circleci-functions/toolkit/releaser"
 )
 
-// defaultPlatforms matches libsubcmd's subcommand matrix — the platforms
-// task-agent is built for. See releaser/releaser.go in circleci/libsubcmd.
+// defaultPlatforms is the set of OS/arch targets functions are built for.
 var defaultPlatforms = map[string][]string{
 	"linux":   {"amd64", "arm", "arm64", "ppc64le", "s390x"},
 	"darwin":  {"amd64", "arm64"},

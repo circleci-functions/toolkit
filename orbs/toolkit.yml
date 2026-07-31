@@ -6,11 +6,10 @@ description: >
 commands:
   private-mod-init:
     description: >
-      Configure git so `go mod download` can fetch private modules,
-      including github.com/circleci-functions/toolkit.
+      Configure git so `go mod download` can fetch private modules in the
+      circleci-functions org, such as github.com/circleci-functions/toolkit.
     steps:
       - run:
           name: Allow private module access
           command: |
-            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci/".insteadOf "https://github.com/circleci/"
             git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"

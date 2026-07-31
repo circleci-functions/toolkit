@@ -20,7 +20,6 @@ import (
 
 	"github.com/cenkalti/backoff/v5"
 
-	"github.com/circleci-functions/toolkit/application"
 	"github.com/circleci-functions/toolkit/correlation"
 	"github.com/circleci-functions/toolkit/internal/semconv"
 	o11y "github.com/circleci-functions/toolkit/observability"
@@ -186,9 +185,6 @@ type Client struct {
 
 	now func() time.Time // purely a test hook
 }
-
-// Make sure the Client is an application component
-var _ = application.Component(&Client{})
 
 // New creates a client configured with the config param
 func New(ctx context.Context, cfg Config) *Client {

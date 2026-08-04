@@ -13,3 +13,38 @@ commands:
           name: Allow private module access
           command: |
             git config --global url."https://x-access-token:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+
+  setup-aws-oidc:
+    description: >
+      Set up the standard AWS_ environment variables so the AWS SDK can assume a
+      role via OIDC, without any long-lived credentials.
+    parameters:
+      role_arn:
+        type: string
+        description: "The ARN of the IAM role to assume (sets AWS_ROLE_ARN)."
+      default_region:
+        type: string
+        description: "The default AWS region to use if another isn't specified (sets AWS_DEFAULT_REGION)."
+        default: "us-east-1"
+      audience:
+        type: string
+        description: "The 'aud' (audience) claim to request on the OIDC token."
+        default: "sts.amazonaws.com"
+    steps:
+      - run:
+          name: Setting up AWS OIDC environment variables
+          environment:
+            AWS_DEFAULT_REGION: << parameters.default_region >>
+            CIRCLECI_AWS_SETUP_AWS_OIDC_AUDIENCE: << parameters.audience >>
+          command: |
+            # Expanded here rather than via `environment:`, which does not
+            # interpolate, so callers can pass a variable such as $MY_ROLE_ARN.
+            AWS_ROLE_ARN="<< parameters.role_arn >>"
+            AWS_WEB_IDENTITY_TOKEN_FILE="$(mktemp --directory --tmpdir 'aws-web-identity-token-file.XXXXXXXX')/token"
+            install -m 0600 /dev/null "${AWS_WEB_IDENTITY_TOKEN_FILE}"
+            claims="$(jq --null-input --compact-output --arg audience "${CIRCLECI_AWS_SETUP_AWS_OIDC_AUDIENCE}" '{"aud":$audience}')"
+            circleci run oidc get --claims "${claims}" >"${AWS_WEB_IDENTITY_TOKEN_FILE}"
+            echo "export AWS_WEB_IDENTITY_TOKEN_FILE=${AWS_WEB_IDENTITY_TOKEN_FILE@Q}" >>"${BASH_ENV}"
+            echo "export AWS_ROLE_ARN=${AWS_ROLE_ARN@Q}" >>"${BASH_ENV}"
+            echo "export AWS_ROLE_SESSION_NAME=\"circleci-workflow-${CIRCLECI_WORKFLOW_ID}\"" >>"${BASH_ENV}"
+            echo "export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION@Q}" >>"${BASH_ENV}"

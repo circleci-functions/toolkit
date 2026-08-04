@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.yaml.in/yaml/v4"
+	"golang.org/x/mod/semver"
 
 	"github.com/circleci-functions/toolkit/compiler"
 	"github.com/circleci-functions/toolkit/functionyaml"
@@ -61,9 +62,22 @@ type Config struct {
 	Client *s3.Client
 }
 
+// validateVersion requires a canonical semver version. Releases are immutable
+// once published, so a malformed version would be permanent: this rejects a
+// missing leading v, and a partial version such as v1 or v1.2.
+func validateVersion(version string) error {
+	if !semver.IsValid(version) || semver.Canonical(version) != version {
+		return fmt.Errorf("version %q must be canonical semver, for example v0.1.0-abc1234", version)
+	}
+	return nil
+}
+
 func newReleaser(ctx context.Context, cfg Config) (Releaser, error) {
 	if cfg.Name == "" || cfg.Version == "" {
 		return Releaser{}, fmt.Errorf("name and version must be provided")
+	}
+	if err := validateVersion(cfg.Version); err != nil {
+		return Releaser{}, err
 	}
 	if cfg.Bucket == "" {
 		cfg.Bucket = "circleci-functions"

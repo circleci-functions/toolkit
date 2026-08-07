@@ -24,6 +24,19 @@ func AddToPath(path string) error {
 	return appendToBashEnv(fmt.Sprintf("export PATH=%s:$PATH\n", path))
 }
 
+// AddAlias sets aliases to be expanded in shell scripts and appends
+// a shell alias definition to $BASH_ENV for each name:command
+// pair, so that later steps in the same job resolve name as command.
+// Returns an error if $BASH_ENV is not set.
+func AddAlias(aliases map[string]string) error {
+	var sb strings.Builder
+	sb.WriteString("shopt -s expand_aliases\n")
+	for k, v := range aliases {
+		fmt.Fprintf(&sb, "alias %s=%q\n", k, v)
+	}
+	return appendToBashEnv(sb.String())
+}
+
 // appendToBashEnv appends content to $BASH_ENV.
 // Returns an error if $BASH_ENV is not set.
 func appendToBashEnv(content string) error {

@@ -56,7 +56,30 @@ func newDefault() *Client {
 	if url := os.Getenv("CIRCLECI_PLUGIN_URL"); url != "" {
 		return NewWithBaseURL(url)
 	}
-	return newWithSocketPath(filepath.Join(os.TempDir(), socketName))
+	return newWithSocketPath(socketPath())
+}
+
+// NewDefault creates the same Client that Run passes to a function: the server
+// named by CIRCLECI_PLUGIN_URL if set, otherwise the task-agent socket.
+// Production code should call Run instead; this is for tests and tools that
+// need a Client without owning the process lifecycle.
+func NewDefault() *Client {
+	return newDefault()
+}
+
+// ServerAvailable reports whether there is a plugin server to talk to — i.e.
+// whether this process is running as a step inside a CircleCI job. Use it to
+// skip or redirect work that needs privileged operations when running locally.
+func ServerAvailable() bool {
+	if os.Getenv("CIRCLECI_PLUGIN_URL") != "" {
+		return true
+	}
+	_, err := os.Stat(socketPath())
+	return err == nil
+}
+
+func socketPath() string {
+	return filepath.Join(os.TempDir(), socketName)
 }
 
 // Run creates a default Client and calls fn. It cancels the context on

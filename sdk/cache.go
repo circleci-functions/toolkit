@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/google/uuid"
 )
 
 // CacheResult is the result of a RestoreCache call.
@@ -100,6 +102,21 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 // "amd64-linux" or "arm64-macos"
 func OSArch() string {
 	return fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
+}
+
+// RunID returns an identifier unique to the current CircleCI job run
+// (CIRCLE_WORKFLOW_ID), or a random one when not running inside a job.
+//
+// Use it to partition cache keys in tests that exercise a real save/restore
+// round-trip. CircleCI cache keys are write-once: under a fixed key the first
+// run's entry wins and every later run's save is silently skipped, so a
+// round-trip asserted against a constant key passes once and then restores
+// stale data.
+func RunID() string {
+	if id := os.Getenv("CIRCLE_WORKFLOW_ID"); id != "" {
+		return id
+	}
+	return uuid.NewString()
 }
 
 // LogCacheErr reports cache errors to stderr, ignoring ErrNoServer (which

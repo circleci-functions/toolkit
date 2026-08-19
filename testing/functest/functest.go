@@ -93,11 +93,16 @@ func New(t *testing.T, opts ...Option) *Sandbox {
 
 // Env returns the environment overrides that put a subprocess in this sandbox,
 // for passing to testing/runner's WithUnsafeAdditionalEnvVars.
+//
+// GOROOT is cleared: `go test` sets it for the test process, and a Go toolchain
+// honours it over its own location — so leaving it set makes a toolchain the
+// function under test installs run with the test runner's tools instead.
 func (s *Sandbox) Env() map[string]string {
 	env := map[string]string{
 		"HOME":           s.Home,
 		"BASH_ENV":       s.BashEnv,
 		"XDG_CACHE_HOME": filepath.Join(s.Home, ".cache"),
+		"GOROOT":         "",
 	}
 	if s.Server != nil {
 		env["CIRCLECI_PLUGIN_URL"] = s.Server.URL()

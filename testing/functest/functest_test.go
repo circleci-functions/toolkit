@@ -102,3 +102,13 @@ func TestSandbox_CacheChecksum_VariesPerRunLocally(t *testing.T) {
 	first, second := s.CacheChecksum(), s.CacheChecksum()
 	assert.Assert(t, first != second, "expected a fresh value per call outside a job")
 }
+
+// go test exports GOROOT for the test process; a subprocess inheriting it would
+// run an installed toolchain against the test runner's tools.
+func TestSandbox_Env_ClearsGOROOT(t *testing.T) {
+	t.Setenv("GOROOT", "/some/host/goroot")
+
+	goroot, ok := functest.New(t).Env()["GOROOT"]
+	assert.Assert(t, ok, "GOROOT must be present so it overrides the inherited value")
+	assert.Equal(t, goroot, "")
+}

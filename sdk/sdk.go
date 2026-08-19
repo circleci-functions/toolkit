@@ -15,7 +15,13 @@ import (
 	"syscall"
 )
 
-const socketName = "circleci-plugin.sock"
+const (
+	socketName = "circleci-plugin.sock"
+
+	// PluginURLEnvVar overrides where the SDK sends privileged operations.
+	// Set by sdktest so a function under test talks to a test cache.
+	PluginURLEnvVar = "CIRCLECI_PLUGIN_URL"
+)
 
 // ErrNoServer is returned when a function isn't running inside a CircleCI
 // job (e.g. it's being run locally). Use errors.Is(err, ErrNoServer) to
@@ -53,25 +59,24 @@ func newWithSocketPath(socketPath string) *Client {
 }
 
 func newDefault() *Client {
-	if url := os.Getenv("CIRCLECI_PLUGIN_URL"); url != "" {
+	if url := os.Getenv(PluginURLEnvVar); url != "" {
 		return NewWithBaseURL(url)
 	}
 	return newWithSocketPath(socketPath())
 }
 
-// NewDefault creates the same Client that Run passes to a function: the server
-// named by CIRCLECI_PLUGIN_URL if set, otherwise the task-agent socket.
+// NewDefault creates the same Client that Run passes to a function.
 // Production code should call Run instead; this is for tests and tools that
 // need a Client without owning the process lifecycle.
 func NewDefault() *Client {
 	return newDefault()
 }
 
-// ServerAvailable reports whether there is a plugin server to talk to — i.e.
-// whether this process is running as a step inside a CircleCI job. Use it to
-// skip or redirect work that needs privileged operations when running locally.
-func ServerAvailable() bool {
-	if os.Getenv("CIRCLECI_PLUGIN_URL") != "" {
+// InCircleCIJob reports whether this process is running as a step inside a
+// CircleCI job, and can therefore perform privileged operations. Use it to skip
+// or redirect work that needs them when running locally.
+func InCircleCIJob() bool {
+	if os.Getenv(PluginURLEnvVar) != "" {
 		return true
 	}
 	_, err := os.Stat(socketPath())

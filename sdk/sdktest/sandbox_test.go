@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/circleci-functions/toolkit/bashenv"
+	"github.com/circleci-functions/toolkit/sdk"
 	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
@@ -53,7 +55,7 @@ func TestSandbox_Env(t *testing.T) {
 
 	assert.Equal(t, env["HOME"], s.Home)
 	assert.Equal(t, env["BASH_ENV"], s.BashEnv)
-	assert.Equal(t, env["CIRCLECI_PLUGIN_URL"], s.Server.URL())
+	assert.Equal(t, env[sdk.PluginURLEnvVar], s.Cache.URL())
 
 	merged := s.EnvWith(map[string]string{"HOME": "/override", "EXTRA": "1"})
 	assert.Equal(t, merged["HOME"], "/override")
@@ -84,13 +86,13 @@ func TestSandbox_ClientRoundTripsCache(t *testing.T) {
 
 // Without a task-agent to talk to, WithRealAgent must degrade to the fake
 // rather than leave the sandbox pointing at a socket that isn't there.
-func TestNew_WithRealAgent_FallsBackToFakeLocally(t *testing.T) {
+func TestNew_WithLiveCache_FallsBackLocally(t *testing.T) {
 	if os.Getenv("CIRCLECI") != "" {
 		t.Skip("a real task-agent is available in CI")
 	}
 
-	s := sdktest.NewSandbox(t, sdktest.WithRealAgent())
-	assert.Assert(t, s.Server != nil, "expected the fake server outside a CircleCI job")
+	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
+	assert.Assert(t, s.Cache != nil, "expected the in-memory cache outside a CircleCI job")
 }
 
 func TestSandbox_CacheChecksum_UsesWorkflowID(t *testing.T) {
@@ -113,4 +115,14 @@ func TestSandbox_Env_ClearsGOROOT(t *testing.T) {
 	goroot, ok := sdktest.NewSandbox(t).Env()["GOROOT"]
 	assert.Assert(t, ok, "GOROOT must be present so it overrides the inherited value")
 	assert.Equal(t, goroot, "")
+}
+
+// The sandbox must be usable with nothing but os/exec, since a function repo may
+// depend on the SDK alone.
+func TestSandbox_Command_AppliesSandboxEnv(t *testing.T) {
+	s := sdktest.NewSandbox(t)
+
+	out, err := s.Command(context.Background(), "sh", "-c", `echo "$HOME|$BASH_ENV|$GOROOT"`).Output()
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(out)), s.Home+"|"+s.BashEnv+"|")
 }

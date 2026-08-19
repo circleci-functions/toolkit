@@ -1,4 +1,6 @@
-// Package sdktest provides a fake CircleCI plugin server for use in tests.
+// Package sdktest provides an in-memory stand-in for the privileged operations
+// sdk performs, plus a Sandbox that keeps a function under test from writing
+// outside temp directories.
 package sdktest
 
 import (
@@ -18,7 +20,8 @@ import (
 	"github.com/circleci-functions/toolkit/sdk"
 )
 
-// Server is a fake CircleCI plugin server for use in tests.
+// Server is an in-memory cache a function under test can save to and restore
+// from. Its behaviour mirrors CircleCI's, including write-once keys.
 type Server struct {
 	srv   *httptest.Server
 	store *cacheStore
@@ -39,7 +42,7 @@ func WithMutableKeys() Option {
 	}
 }
 
-// NewServer starts a fake plugin server and registers cleanup with t.
+// NewServer starts an in-memory cache and registers cleanup with t.
 func NewServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 
@@ -60,7 +63,7 @@ func NewServer(t *testing.T, opts ...Option) *Server {
 	return s
 }
 
-// Client returns an sdk.Client configured to talk to this server.
+// Client returns an sdk.Client that performs its cache operations here.
 func (s *Server) Client() *sdk.Client {
 	return sdk.NewWithBaseURL(s.srv.URL)
 }
@@ -70,12 +73,12 @@ func (s *Server) URL() string {
 	return s.srv.URL
 }
 
-// SetupEnv sets CIRCLECI_PLUGIN_URL in the test environment so that subprocess
-// binaries started by this test connect to this server. The env var is
-// automatically cleared when the test ends.
+// SetupEnv points the test environment at this server, so subprocess binaries
+// started by the test use it for cache operations. Undone when the test ends.
+// Prefer NewSandbox, which does this and isolates the filesystem too.
 func (s *Server) SetupEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("CIRCLECI_PLUGIN_URL", s.srv.URL)
+	t.Setenv(sdk.PluginURLEnvVar, s.srv.URL)
 }
 
 // SavedKeys returns the keys written to the cache so far, sorted. Useful for

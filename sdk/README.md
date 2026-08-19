@@ -62,7 +62,7 @@ rotation.
 
 ## Testing
 
-`sdktest` provides a fake plugin server and a sandbox. Reach for the sandbox by
+`sdktest` gives you an in-memory cache and a sandbox. Reach for the sandbox by
 default: a function that installs tools writes to `$HOME`, symlinks onto `PATH`
 and saves caches, and against real defaults a test does all of that to the
 machine running it.
@@ -73,7 +73,7 @@ import "github.com/circleci-functions/toolkit/sdk/sdktest"
 
 ### Unit test
 
-`Client()` gives you a client wired to the fake server.
+`Client()` gives you a client whose cache operations stay in memory.
 
 ```go
 func TestRun(t *testing.T) {
@@ -84,38 +84,42 @@ func TestRun(t *testing.T) {
 }
 ```
 
+`srv.SavedKeys()` returns what the function saved, so you can assert it
+partitions its keys the way you intended.
+
 ### Subprocess test
 
 `NewSandbox` redirects `$HOME` and `$BASH_ENV` at temp directories and gives you
 `BinDir` and `InstallDir` to pass to your function's flags, so nothing lands
-outside the test. Combine it with `testing/runner`:
+outside the test. `Command` runs your binary inside it:
 
 ```go
 func TestBinary(t *testing.T) {
     s := sdktest.NewSandbox(t)
 
-    r := runner.New(t, binaryPath, runner.WithSandboxEnv(s.Env()))
-    _, err := r.Run("install", "--install-dir", s.InstallDir, "--bin-dir", s.BinDir)
-    assert.NilError(t, err, r.StderrString())
-
-    path, err := bashenv.Path(s.BashEnv)  // what a later job step would see
-    assert.NilError(t, err)
+    out, err := s.Command(t.Context(), binaryPath,
+        "install", "--install-dir", s.InstallDir, "--bin-dir", s.BinDir,
+    ).CombinedOutput()
+    assert.NilError(t, err, string(out))
 }
 ```
 
-Use `s.CacheChecksum()` for anything that round-trips a real save and restore.
-It is unique per run, which a constant key is not — see the write-once note
-above.
+Use `s.CacheChecksum()` for anything that round-trips a save and restore. It is
+unique per run, which a constant key is not — see the write-once note above.
 
-### Testing against the real task-agent
+### Testing against CircleCI's own cache
 
-`sdktest.WithRealAgent()` uses the task-agent when the test runs inside a
-CircleCI job, and the fake otherwise, so one suite can be honest in CI and still
-run on a laptop. `Sandbox.Server` is nil when the real agent is in use.
+The in-memory cache mirrors CircleCI's behaviour, but only the real one is
+authoritative. `WithLiveCache` uses it when the test runs inside a CircleCI job,
+and the in-memory one everywhere else, so a single suite is exact in CI and still
+runs on a laptop:
 
 ```go
-s := sdktest.NewSandbox(t, sdktest.WithRealAgent())
+s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
+if s.Cache != nil {
+    t.Log("running against the in-memory cache")
+}
 ```
 
-`sdk.ServerAvailable()` reports whether an agent is reachable if you need to
-branch on it yourself.
+`sdk.InCircleCIJob()` reports the same condition if you need to branch on it
+yourself.

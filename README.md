@@ -9,7 +9,7 @@ first-party, versioned step implementations invoked via `circleci run <name>@<ve
 |---|---|
 | [`bashenv`](bashenv) | Append shell exports to `$BASH_ENV`, and read them back |
 | [`sdk`](sdk) | Perform privileged CircleCI job operations (cache save/restore, etc.) without holding credentials |
-| [`sdk/sdktest`](sdk/sdktest) | Fake CircleCI plugin server and test sandbox for functions that use `sdk` |
+| [`sdk/sdktest`](sdk/sdktest) | In-memory cache and test sandbox for functions that use `sdk` |
 | [`functionyaml`](functionyaml) | Define, build, and validate the `function.yaml` schema |
 | [`archive`](archive) | Helpers for writing files extracted from archives |
 | [`testing/compiler`](testing/compiler) | Compile a function's binary once for a test suite |

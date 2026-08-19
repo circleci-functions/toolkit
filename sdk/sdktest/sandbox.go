@@ -1,7 +1,10 @@
 package sdktest
 
 import (
+	"context"
 	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -28,29 +31,29 @@ type Sandbox struct {
 	// InstallDir stands in for a function's default install root. Pass it to
 	// your function's --install-dir equivalent.
 	InstallDir string
-	// Client talks to whichever cache server this sandbox is using.
+	// Client performs cache operations against whichever cache this sandbox uses.
 	Client *sdk.Client
-	// Server is the fake cache server, or nil when using the real task-agent.
-	Server *Server
+	// Cache is the in-memory cache backing this sandbox, or nil when running
+	// against CircleCI's own cache (see WithLiveCache).
+	Cache *Server
 }
 
 // SandboxOption configures a Sandbox.
 type SandboxOption func(*sandboxConfig)
 
 type sandboxConfig struct {
-	realAgent bool
+	liveCache bool
 }
 
-// WithRealAgent talks to the real CircleCI task-agent instead of the in-process
-// fake, so cache behaviour under test is the real thing — including write-once
-// keys and restore-key prefix matching.
+// WithLiveCache uses CircleCI's cache rather than the in-memory one, so the
+// behaviour under test is the real thing.
 //
-// Outside a CircleCI job there is no agent to talk to, so the sandbox falls back
-// to the fake and Sandbox.Server is non-nil. That lets one acceptance suite run
-// both ways: real cache semantics in CI, still runnable on a laptop.
-func WithRealAgent() SandboxOption {
+// Only available to a test running as a step inside a CircleCI job; elsewhere
+// the sandbox uses the in-memory cache and leaves Sandbox.Cache non-nil. One
+// suite can therefore be exact in CI and still run on a laptop.
+func WithLiveCache() SandboxOption {
 	return func(c *sandboxConfig) {
-		c.realAgent = true
+		c.liveCache = true
 	}
 }
 
@@ -75,19 +78,37 @@ func NewSandbox(t *testing.T, opts ...SandboxOption) *Sandbox {
 	t.Setenv("HOME", home)
 	t.Setenv("BASH_ENV", s.BashEnv)
 
-	if cfg.realAgent && sdk.ServerAvailable() {
+	if cfg.liveCache && sdk.InCircleCIJob() {
 		s.Client = sdk.NewDefault()
 		return s
 	}
 
-	s.Server = NewServer(t)
-	s.Server.SetupEnv(t)
-	s.Client = s.Server.Client()
+	s.Cache = NewServer(t)
+	s.Cache.SetupEnv(t)
+	s.Client = s.Cache.Client()
 	return s
 }
 
+// Command returns an exec.Cmd that runs the function's binary inside this
+// sandbox, so a subprocess test needs nothing beyond os/exec.
+func (s *Sandbox) Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec
+	cmd.Env = s.CmdEnv()
+	return cmd
+}
+
+// CmdEnv returns the parent environment with this sandbox's overrides applied,
+// in the form exec.Cmd.Env expects.
+func (s *Sandbox) CmdEnv() []string {
+	env := os.Environ()
+	for k, v := range s.Env() {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
 // Env returns the environment overrides that put a subprocess in this sandbox.
-// Prefer Runner, which applies them for you.
+// Prefer Command, which applies them for you.
 //
 // GOROOT is cleared: `go test` sets it for the test process, and a Go toolchain
 // honours it over its own location — so leaving it set makes a toolchain the
@@ -99,8 +120,8 @@ func (s *Sandbox) Env() map[string]string {
 		"XDG_CACHE_HOME": filepath.Join(s.Home, ".cache"),
 		"GOROOT":         "",
 	}
-	if s.Server != nil {
-		env["CIRCLECI_PLUGIN_URL"] = s.Server.URL()
+	if s.Cache != nil {
+		env[sdk.PluginURLEnvVar] = s.Cache.URL()
 	}
 	return env
 }

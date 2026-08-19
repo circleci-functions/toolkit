@@ -1,4 +1,4 @@
-package functest_test
+package sdktest_test
 
 import (
 	"context"
@@ -9,14 +9,14 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/circleci-functions/toolkit/bashenv"
-	"github.com/circleci-functions/toolkit/testing/functest"
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
 func TestNew_RedirectsHomeAndBashEnv(t *testing.T) {
 	realHome, err := os.UserHomeDir()
 	assert.NilError(t, err)
 
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 
 	home, err := os.UserHomeDir()
 	assert.NilError(t, err)
@@ -26,7 +26,7 @@ func TestNew_RedirectsHomeAndBashEnv(t *testing.T) {
 }
 
 func TestNew_DirsAreDistinctAndWritable(t *testing.T) {
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 
 	seen := map[string]bool{}
 	for _, dir := range []string{s.Home, s.BinDir, s.InstallDir} {
@@ -36,17 +36,19 @@ func TestNew_DirsAreDistinctAndWritable(t *testing.T) {
 	}
 }
 
-func TestSandbox_Path_ReflectsBashEnv(t *testing.T) {
-	s := functest.New(t)
+func TestSandbox_BashEnv_IsReadableByBashenv(t *testing.T) {
+	s := sdktest.NewSandbox(t)
 	t.Setenv("PATH", "/usr/bin")
 
 	assert.NilError(t, bashenv.AddToPath(filepath.Join(s.InstallDir, "bin")))
 
-	assert.Equal(t, s.Path(t), filepath.Join(s.InstallDir, "bin")+":/usr/bin")
+	got, err := bashenv.Path(s.BashEnv)
+	assert.NilError(t, err)
+	assert.Equal(t, got, filepath.Join(s.InstallDir, "bin")+":/usr/bin")
 }
 
 func TestSandbox_Env(t *testing.T) {
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 	env := s.Env()
 
 	assert.Equal(t, env["HOME"], s.Home)
@@ -61,7 +63,7 @@ func TestSandbox_Env(t *testing.T) {
 }
 
 func TestSandbox_ClientRoundTripsCache(t *testing.T) {
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 	ctx := context.Background()
 
 	dir := filepath.Join(s.Home, "cache")
@@ -87,18 +89,18 @@ func TestNew_WithRealAgent_FallsBackToFakeLocally(t *testing.T) {
 		t.Skip("a real task-agent is available in CI")
 	}
 
-	s := functest.New(t, functest.WithRealAgent())
+	s := sdktest.NewSandbox(t, sdktest.WithRealAgent())
 	assert.Assert(t, s.Server != nil, "expected the fake server outside a CircleCI job")
 }
 
 func TestSandbox_CacheChecksum_UsesWorkflowID(t *testing.T) {
 	t.Setenv("CIRCLE_WORKFLOW_ID", "workflow-abc")
-	assert.Equal(t, functest.New(t).CacheChecksum(), "workflow-abc")
+	assert.Equal(t, sdktest.NewSandbox(t).CacheChecksum(), "workflow-abc")
 }
 
 func TestSandbox_CacheChecksum_VariesPerRunLocally(t *testing.T) {
 	t.Setenv("CIRCLE_WORKFLOW_ID", "")
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 	first, second := s.CacheChecksum(), s.CacheChecksum()
 	assert.Assert(t, first != second, "expected a fresh value per call outside a job")
 }
@@ -108,7 +110,7 @@ func TestSandbox_CacheChecksum_VariesPerRunLocally(t *testing.T) {
 func TestSandbox_Env_ClearsGOROOT(t *testing.T) {
 	t.Setenv("GOROOT", "/some/host/goroot")
 
-	goroot, ok := functest.New(t).Env()["GOROOT"]
+	goroot, ok := sdktest.NewSandbox(t).Env()["GOROOT"]
 	assert.Assert(t, ok, "GOROOT must be present so it overrides the inherited value")
 	assert.Equal(t, goroot, "")
 }

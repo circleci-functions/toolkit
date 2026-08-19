@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"testing"
@@ -64,6 +65,16 @@ func WithUnsafeAdditionalEnvVars(envVars map[string]string) Opt {
 func WithUnsafeOSEnvVars() Opt {
 	return func(r *Runner) {
 		r.useOSEnvVars = true
+	}
+}
+
+// WithSandboxEnv inherits the parent environment and then applies env on top, so
+// env wins. Pass sdktest.Sandbox.Env or EnvWith to run the binary against temp
+// stand-ins for $HOME, $BASH_ENV and the cache server rather than the real ones.
+func WithSandboxEnv(env map[string]string) Opt {
+	return func(r *Runner) {
+		r.useOSEnvVars = true
+		maps.Copy(r.envVars, env)
 	}
 }
 

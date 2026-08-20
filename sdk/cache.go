@@ -34,6 +34,11 @@ func (e *ServerError) Error() string {
 type saveRequest struct {
 	Key   string   `json:"key"`
 	Paths []string `json:"paths"`
+
+	// Set when the save is registered to run at the end of the job.
+	Teardown      bool   `json:"teardown,omitempty"`
+	When          string `json:"when,omitempty"`
+	IgnoreFailure bool   `json:"ignore_failure,omitempty"`
 }
 
 type restoreRequest struct {

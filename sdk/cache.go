@@ -48,6 +48,10 @@ type restoreRequest struct {
 type serverResponse struct {
 	Result string `json:"result"`
 	Error  string `json:"error"`
+
+	// Set when the step was queued for the end of the job instead of run, in
+	// which case Result is empty: the step has no result until it runs.
+	Deferred bool `json:"deferred"`
 }
 
 // SaveCache saves paths under key. It returns ErrNoServer if the function

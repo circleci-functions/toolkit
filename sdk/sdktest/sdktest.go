@@ -120,7 +120,7 @@ func (cs *cacheStore) handleSave(w http.ResponseWriter, r *http.Request) {
 		cs.mu.Lock()
 		cs.pending = append(cs.pending, pendingSave{key: req.Key, paths: req.Paths})
 		cs.mu.Unlock()
-		writeResult(w, "deferred")
+		writeDeferred(w)
 		return
 	}
 
@@ -152,6 +152,15 @@ func writeResult(w http.ResponseWriter, result string) {
 	_ = json.NewEncoder(w).Encode(struct {
 		Result string `json:"result"`
 	}{result})
+}
+
+// writeDeferred matches the agent: 202, and no result, since the step has not run.
+func writeDeferred(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(struct {
+		Deferred bool `json:"deferred"`
+	}{true})
 }
 
 func (cs *cacheStore) handleRestore(w http.ResponseWriter, r *http.Request) {

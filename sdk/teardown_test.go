@@ -21,14 +21,15 @@ type savePayload struct {
 	IgnoreFailure bool     `json:"ignore_failure"`
 }
 
-// saveRecorder answers a save with status and result, and records what was
-// sent. The status matters: the agent accepts a deferred step with 202, not 200.
-func saveRecorder(t *testing.T, status int, result string, got *savePayload) http.Handler {
+// saveRecorder answers a save with status and body, and records what was sent.
+// Both matter: the agent accepts a deferred step with 202 and {"deferred":true},
+// and reports a step it actually ran with 200 and a result.
+func saveRecorder(t *testing.T, status int, body map[string]any, got *savePayload) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.NilError(t, json.NewDecoder(r.Body).Decode(got))
 		w.WriteHeader(status)
-		assert.NilError(t, json.NewEncoder(w).Encode(map[string]string{"result": result}))
+		assert.NilError(t, json.NewEncoder(w).Encode(body))
 	})
 }
 
@@ -59,12 +60,12 @@ func TestAtTeardown_SaveCache(t *testing.T) {
 		t.Run(tc.doc, func(t *testing.T) {
 			var got savePayload
 			srv := fakepluginserver.New(t)
-			srv.SaveCache(saveRecorder(t, http.StatusAccepted, "deferred", &got))
+			srv.SaveCache(saveRecorder(t, http.StatusAccepted, map[string]any{"deferred": true}, &got))
 			client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 			err := tc.save(client.AtTeardown()).SaveCache(context.Background(), "my-key", []string{"./cache"})
 
-			// A deferred result means the save was registered, not that it failed.
+			// A 202 means the save was registered, not that it failed.
 			assert.NilError(t, err)
 			assert.Equal(t, got.Key, "my-key")
 			assert.DeepEqual(t, got.Paths, []string{"./cache"})
@@ -81,7 +82,7 @@ func TestAtTeardown_SaveCache(t *testing.T) {
 func TestSaveCache_SendsNoTeardownFields(t *testing.T) {
 	var got savePayload
 	srv := fakepluginserver.New(t)
-	srv.SaveCache(saveRecorder(t, http.StatusOK, "success", &got))
+	srv.SaveCache(saveRecorder(t, http.StatusOK, map[string]any{"result": "success"}, &got))
 	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 	err := client.SaveCache(context.Background(), "my-key", []string{"./cache"})
@@ -97,7 +98,7 @@ func TestSaveCache_SendsNoTeardownFields(t *testing.T) {
 func TestAtTeardown_ConditionDoesNotLeak(t *testing.T) {
 	var got savePayload
 	srv := fakepluginserver.New(t)
-	srv.SaveCache(saveRecorder(t, http.StatusAccepted, "deferred", &got))
+	srv.SaveCache(saveRecorder(t, http.StatusAccepted, map[string]any{"deferred": true}, &got))
 	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 	teardown := client.AtTeardown()

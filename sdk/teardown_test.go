@@ -21,11 +21,13 @@ type savePayload struct {
 	IgnoreFailure bool     `json:"ignore_failure"`
 }
 
-// saveRecorder answers a save with result and records what was sent.
-func saveRecorder(t *testing.T, result string, got *savePayload) http.Handler {
+// saveRecorder answers a save with status and result, and records what was
+// sent. The status matters: the agent accepts a deferred step with 202, not 200.
+func saveRecorder(t *testing.T, status int, result string, got *savePayload) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.NilError(t, json.NewDecoder(r.Body).Decode(got))
+		w.WriteHeader(status)
 		assert.NilError(t, json.NewEncoder(w).Encode(map[string]string{"result": result}))
 	})
 }
@@ -57,7 +59,7 @@ func TestAtTeardown_SaveCache(t *testing.T) {
 		t.Run(tc.doc, func(t *testing.T) {
 			var got savePayload
 			srv := fakepluginserver.New(t)
-			srv.SaveCache(saveRecorder(t, "deferred", &got))
+			srv.SaveCache(saveRecorder(t, http.StatusAccepted, "deferred", &got))
 			client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 			err := tc.save(client.AtTeardown()).SaveCache(context.Background(), "my-key", []string{"./cache"})
@@ -79,7 +81,7 @@ func TestAtTeardown_SaveCache(t *testing.T) {
 func TestSaveCache_SendsNoTeardownFields(t *testing.T) {
 	var got savePayload
 	srv := fakepluginserver.New(t)
-	srv.SaveCache(saveRecorder(t, "success", &got))
+	srv.SaveCache(saveRecorder(t, http.StatusOK, "success", &got))
 	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 	err := client.SaveCache(context.Background(), "my-key", []string{"./cache"})
@@ -95,7 +97,7 @@ func TestSaveCache_SendsNoTeardownFields(t *testing.T) {
 func TestAtTeardown_ConditionDoesNotLeak(t *testing.T) {
 	var got savePayload
 	srv := fakepluginserver.New(t)
-	srv.SaveCache(saveRecorder(t, "deferred", &got))
+	srv.SaveCache(saveRecorder(t, http.StatusAccepted, "deferred", &got))
 	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
 	teardown := client.AtTeardown()

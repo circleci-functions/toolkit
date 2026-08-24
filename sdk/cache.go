@@ -93,7 +93,8 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 		return nil, fmt.Errorf("sdk: decode response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// Any 2xx is a success: a deferred step is accepted with 202, not 200.
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, &ServerError{Msg: result.Error}
 	}
 

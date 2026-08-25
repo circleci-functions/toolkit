@@ -34,6 +34,10 @@ func (e *ServerError) Error() string {
 type saveRequest struct {
 	Key   string   `json:"key"`
 	Paths []string `json:"paths"`
+
+	// Set when the save is registered to run at the end of the job.
+	Teardown bool   `json:"teardown,omitempty"`
+	When     string `json:"when,omitempty"`
 }
 
 type restoreRequest struct {
@@ -43,6 +47,10 @@ type restoreRequest struct {
 type serverResponse struct {
 	Result string `json:"result"`
 	Error  string `json:"error"`
+
+	// Set when the step was queued for the end of the job instead of run, in
+	// which case Result is empty: the step has no result until it runs.
+	Deferred bool `json:"deferred"`
 }
 
 // SaveCache saves paths under key. It returns ErrNoServer if the function
@@ -88,7 +96,8 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 		return nil, fmt.Errorf("sdk: decode response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// Any 2xx is a success: a deferred step is accepted with 202, not 200.
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, &ServerError{Msg: result.Error}
 	}
 

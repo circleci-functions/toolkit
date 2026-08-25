@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -18,7 +19,8 @@ import (
 
 // Server is a fake CircleCI plugin server for use in tests.
 type Server struct {
-	srv *httptest.Server
+	srv   *httptest.Server
+	cache *cacheStore
 }
 
 // NewServer starts a fake plugin server and registers cleanup with t.
@@ -34,9 +36,42 @@ func NewServer(t *testing.T) *Server {
 	mux.HandleFunc("/step/cache/save", cs.handleSave)
 	mux.HandleFunc("/step/cache/restore", cs.handleRestore)
 
-	s := &Server{srv: httptest.NewServer(mux)}
+	s := &Server{srv: httptest.NewServer(mux), cache: cs}
 	t.Cleanup(s.srv.Close)
 	return s
+}
+
+// PendingCacheSaves returns the keys of the cache saves registered to run at
+// the end of the job and not yet run, in the order they were registered.
+//
+// Use it to assert a function registered a save without having to end the job
+// first.
+func (s *Server) PendingCacheSaves() []string {
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+
+	keys := make([]string, 0, len(s.cache.pending))
+	for _, p := range s.cache.pending {
+		keys = append(keys, p.key)
+	}
+	return keys
+}
+
+// EndJob runs the work registered to run at the end of the job, in reverse
+// order of registration, as the job itself would.
+func (s *Server) EndJob(t *testing.T) {
+	t.Helper()
+
+	s.cache.mu.Lock()
+	pending := s.cache.pending
+	s.cache.pending = nil
+	s.cache.mu.Unlock()
+
+	for _, p := range slices.Backward(pending) {
+		if err := s.cache.save(p.key, p.paths); err != nil {
+			t.Fatalf("save cache %q at end of job: %v", p.key, err)
+		}
+	}
 }
 
 // Client returns an sdk.Client configured to talk to this server.
@@ -57,37 +92,75 @@ type cacheEntry struct {
 	storeDir string
 }
 
+// pendingSave is a cache save registered to run at the end of the job.
+type pendingSave struct {
+	key   string
+	paths []string
+}
+
 type cacheStore struct {
 	mu       sync.Mutex
 	entries  map[string]*cacheEntry
 	storeDir string
+	pending  []pendingSave
 }
 
 func (cs *cacheStore) handleSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Key   string   `json:"key"`
-		Paths []string `json:"paths"`
+		Key      string   `json:"key"`
+		Paths    []string `json:"paths"`
+		Teardown bool     `json:"teardown"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	if req.Teardown {
+		cs.mu.Lock()
+		cs.pending = append(cs.pending, pendingSave{key: req.Key, paths: req.Paths})
+		cs.mu.Unlock()
+		writeDeferred(w)
+		return
+	}
+
+	if err := cs.save(req.Key, req.Paths); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeResult(w, "success")
+}
+
+// save copies paths into the store under key.
+func (cs *cacheStore) save(key string, paths []string) error {
 	h := sha256.New()
-	_, _ = io.WriteString(h, req.Key)
+	_, _ = io.WriteString(h, key)
 	keyDir := filepath.Join(cs.storeDir, hex.EncodeToString(h.Sum(nil))[:16])
-	for _, p := range req.Paths {
+	for _, p := range paths {
 		if err := copyDirTree(p, filepath.Join(keyDir, filepath.Base(p))); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
 	cs.mu.Lock()
-	cs.entries[req.Key] = &cacheEntry{paths: req.Paths, storeDir: keyDir}
+	cs.entries[key] = &cacheEntry{paths: paths, storeDir: keyDir}
 	cs.mu.Unlock()
+	return nil
+}
+
+func writeResult(w http.ResponseWriter, result string) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Result string `json:"result"`
-	}{"success"})
+	}{result})
+}
+
+// writeDeferred matches the agent: 202, and no result, since the step has not run.
+func writeDeferred(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(struct {
+		Deferred bool `json:"deferred"`
+	}{true})
 }
 
 func (cs *cacheStore) handleRestore(w http.ResponseWriter, r *http.Request) {

@@ -39,8 +39,35 @@ func run(ctx context.Context, client *sdk.Client) error {
 |---|---|---|
 | `client.SaveCache(ctx, key, paths)` | `error` | Save paths under a cache key |
 | `client.RestoreCache(ctx, keys)` | `(CacheResult, error)` | Restore the first matching cache key |
+| `client.AtTeardown().SaveCache(ctx, key, paths)` | `error` | Register a cache save to run at the end of the job |
+| `client.AtTeardown().OnFail()`, `.OnSuccess()` | `*Teardown` | Narrow a registration to a job outcome |
 
 `sdk.ErrNoServer` is returned when the function is not running inside a CircleCI job. Use `errors.Is(err, sdk.ErrNoServer)` to detect this.
+
+### Saving at the end of the job
+
+A cache usually needs a restore near the start and a matching save near the end. `AtTeardown` lets you register both in one place, so the key is written once:
+
+```go
+func run(ctx context.Context, client *sdk.Client) error {
+    key := "go-modules-{{ checksum \"go.sum\" }}"
+
+    if _, err := client.RestoreCache(ctx, []string{key}); err != nil {
+        return fmt.Errorf("restore cache: %w", err)
+    }
+
+    // Registered here, saved once the job's steps are done.
+    return client.AtTeardown().SaveCache(ctx, key, []string{"~/go/pkg/mod"})
+}
+```
+
+Registered work runs at the end of the job in reverse order of registration, and still runs if the job is cancelled or times out. A failing teardown step fails the job, but a cache save never fails — it reports success whatever happens to it, exactly as an inline `SaveCache` does. `SaveCache` returns once the save is registered, so it reports nothing about whether the save itself succeeded.
+
+Use `OnFail` or `OnSuccess` to register work for one job outcome only, for example collecting diagnostics that are only worth keeping when something broke:
+
+```go
+client.AtTeardown().OnFail().SaveCache(ctx, key, paths)
+```
 
 ## Testing
 
@@ -58,6 +85,21 @@ func TestRun(t *testing.T) {
 
     err := run(context.Background(), srv.Client())
     assert.NilError(t, err)
+}
+```
+
+A save registered for the end of the job is recorded rather than performed, so a test decides when it happens. `srv.PendingCacheSaves()` reports what is registered and not yet run, and `srv.EndJob(t)` runs it as the job would:
+
+```go
+func TestRunSavesAtEndOfJob(t *testing.T) {
+    srv := sdktest.NewServer(t)
+
+    err := run(context.Background(), srv.Client())
+    assert.NilError(t, err)
+    assert.DeepEqual(t, srv.PendingCacheSaves(), []string{"go-modules-abc123"})
+
+    srv.EndJob(t)
+    // the cache is now saved, and a restore brings it back
 }
 ```
 

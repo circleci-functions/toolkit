@@ -46,15 +46,15 @@ func (t *Teardown) OnSuccess() *Teardown {
 // returns once the save is registered, not once it has run, so it reports
 // nothing about whether the save itself succeeded.
 //
-// The save is best effort: if it fails, the job is not failed. It returns
-// ErrNoServer if the function isn't running inside a CircleCI job.
+// The save is best effort, and a failed one does not fail the job: a cache save
+// reports success whatever happens to it, whether it runs here or inline. It
+// returns ErrNoServer if the function isn't running inside a CircleCI job.
 func (t *Teardown) SaveCache(ctx context.Context, key string, paths []string) error {
 	_, err := t.client.do(ctx, "/step/cache/save", saveRequest{
-		Key:           key,
-		Paths:         paths,
-		Teardown:      true,
-		When:          t.when,
-		IgnoreFailure: true,
+		Key:      key,
+		Paths:    paths,
+		Teardown: true,
+		When:     t.when,
 	})
 	return err
 }

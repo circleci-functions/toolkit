@@ -36,9 +36,8 @@ type saveRequest struct {
 	Paths []string `json:"paths"`
 
 	// Set when the save is registered to run at the end of the job.
-	Teardown      bool   `json:"teardown,omitempty"`
-	When          string `json:"when,omitempty"`
-	IgnoreFailure bool   `json:"ignore_failure,omitempty"`
+	Teardown bool   `json:"teardown,omitempty"`
+	When     string `json:"when,omitempty"`
 }
 
 type restoreRequest struct {

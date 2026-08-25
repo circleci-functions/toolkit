@@ -11,8 +11,9 @@ import (
 	"github.com/circleci-functions/toolkit/sdk/internal/testing/fakepluginserver"
 )
 
-// savePayload is every field the client may send when saving a cache, so a
-// test can assert on the ones it does not expect as well as the ones it does.
+// savePayload is every field the client may send when saving a cache, plus
+// ignore_failure which it must never send, so a test can assert on the fields it
+// does not expect as well as the ones it does.
 type savePayload struct {
 	Key           string   `json:"key"`
 	Paths         []string `json:"paths"`
@@ -71,8 +72,9 @@ func TestAtTeardown_SaveCache(t *testing.T) {
 			assert.DeepEqual(t, got.Paths, []string{"./cache"})
 			assert.Equal(t, got.Teardown, true)
 			assert.Equal(t, got.When, tc.expectedWhen)
-			// Best effort, so a failure at the end of the job does not fail the job.
-			assert.Equal(t, got.IgnoreFailure, true)
+			// The agent rejects ignore_failure outright: a cache save reports
+			// success whatever happens to it, so there is nothing to opt out of.
+			assert.Equal(t, got.IgnoreFailure, false)
 		})
 	}
 }

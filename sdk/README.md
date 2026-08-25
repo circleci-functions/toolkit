@@ -61,7 +61,7 @@ func run(ctx context.Context, client *sdk.Client) error {
 }
 ```
 
-Registered work runs at the end of the job in reverse order of registration, and still runs if the job is cancelled or times out. A registered save is best effort: if it fails, the job is not failed. `SaveCache` returns once the save is registered, so it reports nothing about whether the save itself succeeded.
+Registered work runs at the end of the job in reverse order of registration, and still runs if the job is cancelled or times out. A failing teardown step fails the job, but a cache save never fails — it reports success whatever happens to it, exactly as an inline `SaveCache` does. `SaveCache` returns once the save is registered, so it reports nothing about whether the save itself succeeded.
 
 Use `OnFail` or `OnSuccess` to register work for one job outcome only, for example collecting diagnostics that are only worth keeping when something broke:
 

@@ -104,9 +104,13 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 	return &result, nil
 }
 
-// OSArch returns a string which corresponds to the environment OS/arch pair.
-// Matches what {{ arch }} would evaluate to in a CircleCI config, for example:
-// "amd64-linux" or "arm64-macos"
+// OSArch returns the running platform as "<GOOS>-<GOARCH>", for example
+// "linux-amd64" or "darwin-arm64". Use it to scope a cache key so entries can't
+// be restored onto a platform they were not built for.
+//
+// This is not the same string as a CircleCI config's {{ arch }}, so a function
+// replacing an orb cannot reuse the orb's cache entries by building the same
+// key shape.
 func OSArch() string {
 	return fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
 }

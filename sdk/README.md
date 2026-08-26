@@ -71,7 +71,17 @@ client.AtTeardown().OnFail().SaveCache(ctx, key, paths)
 
 ## Testing
 
-Import `sdktest` to start a fake server in your tests. Use `srv.Client()` to get a pre-configured client, or `srv.SetupEnv(t)` when your test runs the function binary as a subprocess.
+Import `sdktest` to start an in-memory cache in your tests. Use `srv.Client()` to get a pre-configured client, or `srv.SetupEnv(t)` when your test runs the function binary as a subprocess.
+
+Its behaviour mirrors CircleCI's, including **write-once keys**: a second save
+under a key already written is a no-op, not an overwrite. A round-trip asserted
+under a constant key therefore passes on the first run and then restores
+whatever that run left behind — partition the key with something that changes.
+Use `sdktest.WithMutableKeys()` if a test deliberately needs the unrealistic
+behaviour.
+
+`srv.SavedKeys()` returns the keys written so far, so you can assert a function
+partitions its keys the way you intended.
 
 ```go
 import "github.com/circleci-functions/toolkit/sdk/sdktest"

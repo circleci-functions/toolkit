@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"testing"
@@ -64,6 +65,21 @@ func WithUnsafeAdditionalEnvVars(envVars map[string]string) Opt {
 func WithUnsafeOSEnvVars() Opt {
 	return func(r *Runner) {
 		r.useOSEnvVars = true
+	}
+}
+
+// WithSandboxEnv applies env on top of the environment a subcommand gets in
+// production, rather than on top of the test process's own. Pass
+// sdktest.Sandbox.Env to run the binary against temp stand-ins for $HOME,
+// $BASH_ENV and the cache rather than the real ones.
+//
+// Unlike WithUnsafeOSEnvVars, this does not widen what the binary can see: the
+// isolation comes from the entries in env, so the run stays as close to
+// production as the runner otherwise makes it. A binary that needs some other
+// inherited variable should be given it by name.
+func WithSandboxEnv(env map[string]string) Opt {
+	return func(r *Runner) {
+		maps.Copy(r.envVars, env)
 	}
 }
 

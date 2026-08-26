@@ -7,11 +7,19 @@ first-party, versioned step implementations invoked via `circleci run <name>@<ve
 
 | Package | Purpose |
 |---|---|
-| [`bashenv`](bashenv) | Append shell export statements to `$BASH_ENV` |
+| [`bashenv`](bashenv) | Append shell exports to `$BASH_ENV`, and read them back |
 | [`sdk`](sdk) | Perform privileged CircleCI job operations (cache save/restore, etc.) without holding credentials |
-| [`sdk/sdktest`](sdk/sdktest) | Fake CircleCI plugin server for testing functions that use `sdk` |
+| [`sdk/sdktest`](sdk/sdktest) | In-memory cache and test sandbox for functions that use `sdk` |
 | [`functionyaml`](functionyaml) | Define, build, and validate the `function.yaml` schema |
 | [`archive`](archive) | Helpers for writing files extracted from archives |
+| [`testing/compiler`](testing/compiler) | Compile a function's binary once for a test suite |
+| [`testing/runner`](testing/runner) | Run that binary as a subprocess the way production will |
+
+`sdk` and `sdk/sdktest` depend only on the standard library, and `sdktest` needs
+nothing beyond `go test` and `os/exec` to run a function's binary under test. A
+function can take the SDK on its own and bring whatever else it likes — the
+`testing` packages are one way to compile and run a binary in a suite, not a
+requirement.
 
 ## `cmd/release`
 

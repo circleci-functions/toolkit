@@ -11,27 +11,45 @@ package main
 
 import (
     "context"
+    "flag"
     "fmt"
 
     "github.com/circleci-functions/toolkit/sdk"
 )
 
+var checksum = flag.String("checksum", "", "value to partition the cache key by")
+
 func main() {
+    flag.Parse()
     sdk.Run(run)
 }
 
 func run(ctx context.Context, client *sdk.Client) error {
-    _, err := client.RestoreCache(ctx, []string{"go-modules-{{ checksum \"go.sum\" }}"})
-    if err != nil {
+    // A cache key is built at runtime. {{ checksum "go.sum" }} is expanded by the
+    // config compiler, so a template string hardcoded here would be saved
+    // verbatim, braces and all — take it as a flag instead.
+    key := fmt.Sprintf("go-modules-%s-%s", sdk.OSArch(), *checksum)
+
+    if _, err := client.RestoreCache(ctx, []string{key}); err != nil {
         return fmt.Errorf("restore cache: %w", err)
     }
 
     // ... do work ...
 
-    paths := []string{"~/go/pkg/mod"}
-    return client.SaveCache(ctx, "go-modules-{{ checksum \"go.sum\" }}", paths)
+    return client.SaveCache(ctx, key, []string{"~/go/pkg/mod"})
 }
 ```
+
+Invoked from a config, the caller expands the template:
+
+```yaml
+- run: my-function --checksum '{{ checksum "go.sum" }}'
+```
+
+Cache keys are **write-once**: the first save under a key wins and later saves
+under that key are skipped. Include something that changes when the cached
+content should — a checksum, and `{{ epoch | round "72h" }}` if you want
+rotation.
 
 ### Available operations
 
@@ -71,36 +89,19 @@ client.AtTeardown().OnFail().SaveCache(ctx, key, paths)
 
 ## Testing
 
-Import `sdktest` to start an in-memory cache in your tests. Use `srv.Client()` to get a pre-configured client, or `srv.SetupEnv(t)` when your test runs the function binary as a subprocess.
-
-Its behaviour mirrors CircleCI's, including **write-once keys**: a second save
-under a key already written is a no-op, not an overwrite. A round-trip asserted
-under a constant key therefore passes on the first run and then restores
-whatever that run left behind — partition the key with something that changes.
-Use `sdktest.WithMutableKeys()` if a test deliberately needs the unrealistic
-behaviour.
-
-It also matches a restore key as a **prefix**, taking the most recently saved
-entry among those matching. A restore tries its keys in order and stops at the
-first that matches anything, so a function can offer a list that broadens as it
-goes and warm-start from a near miss:
-
-```go
-client.RestoreCache(ctx, []string{
-    "v1-build-" + checksum + "-" + window, // exact
-    "v1-build-" + checksum + "-",          // same deps, any window
-    "v1-build-",                           // any deps
-})
-```
-
-`srv.SavedKeys()` returns the keys written so far, so you can assert a function
-partitions its keys the way you intended.
+`sdktest` gives you an in-memory cache and a sandbox, and needs nothing beyond
+`go test` and `os/exec`. Reach for the sandbox by default: a function's defaults
+point at the places a job owns — `$HOME`, `$BASH_ENV`, somewhere on `PATH`, a
+cache key — and against those defaults a test does all of that to the machine
+running it.
 
 ```go
 import "github.com/circleci-functions/toolkit/sdk/sdktest"
 ```
 
 ### Unit test
+
+`Client()` gives you a client whose cache operations stay in memory.
 
 ```go
 func TestRun(t *testing.T) {
@@ -110,6 +111,29 @@ func TestRun(t *testing.T) {
     assert.NilError(t, err)
 }
 ```
+
+`srv.SavedKeys()` returns what the function saved, so you can assert it
+partitions its keys the way you intended.
+
+The in-memory cache mirrors CircleCI's behaviour:
+
+- **Write-once keys.** A second save under a key already written is a no-op, not
+  an overwrite. Use `sdktest.WithMutableKeys()` if a test deliberately needs the
+  unrealistic behaviour.
+- **Prefix matching on restore.** A restore key matches any saved key it is a
+  prefix of, and takes the most recently saved among them. A restore tries its
+  keys in order and stops at the first that matches anything, so a function can
+  offer a list that broadens as it goes and warm-start from a near miss:
+
+  ```go
+  client.RestoreCache(ctx, []string{
+      "v1-build-" + checksum + "-" + window, // exact
+      "v1-build-" + checksum + "-",          // same deps, any window
+      "v1-build-",                           // any deps
+  })
+  ```
+
+### Saves registered for the end of the job
 
 A save registered for the end of the job is recorded rather than performed, so a test decides when it happens. `srv.PendingCacheSaves()` reports what is registered and not yet run, and `srv.EndJob(t)` runs it as the job would:
 
@@ -126,17 +150,93 @@ func TestRunSavesAtEndOfJob(t *testing.T) {
 }
 ```
 
-### Subprocess / integration test
+`EndJob` ends a job whose steps succeeded, so work registered with `OnFail` is
+discarded; `EndJobAfterFailure(t)` ends one whose steps failed.
 
-When running the compiled binary as a subprocess, call `srv.SetupEnv(t)` before starting the process. It injects the fake server URL into the test environment so the binary connects to it automatically.
+### Subprocess test
+
+`NewSandbox` gives you temp stand-ins for the places a function writes —
+`Home`, `BashEnv`, `BinDir`, `InstallDir` — so nothing lands outside the test.
+Pass `Env()` to the subprocess:
 
 ```go
 func TestBinary(t *testing.T) {
-    srv := sdktest.NewServer(t)
-    srv.SetupEnv(t)
+    s := sdktest.NewSandbox(t)
 
-    cmd := exec.CommandContext(ctx, binaryPath, "--some-flag")
+    cmd := exec.CommandContext(t.Context(), binaryPath,
+        "install", "--install-dir", s.InstallDir, "--bin-dir", s.BinDir,
+    )
+    cmd.Env = s.CmdEnv(os.Environ())
+
     out, err := cmd.CombinedOutput()
     assert.NilError(t, err, string(out))
 }
 ```
+
+`toolkit/testing/runner` takes the same map via `runner.WithSandboxEnv(s.Env())`.
+
+`NewSandbox` does not change the test process's own environment, so a
+subprocess-only suite can run in parallel. A test that exercises the function
+in-process instead needs `s.ApplyToProcess(t)`, which points this process's
+`$HOME` and `$BASH_ENV` at the sandbox for the duration of the test — and must
+not then be parallel.
+
+The sandbox has no opinion about what your function does, so add whatever else
+it needs on top:
+
+```go
+env := maps.Clone(s.Env())
+env["MY_TOOL_HOME"] = filepath.Join(s.Home, ".my-tool")
+```
+
+Watch for variables `go test` exports to the test process that a subprocess
+should not inherit. A function that installs a Go toolchain wants `GOROOT`
+cleared, for instance, since a toolchain honours it over its own location and
+would otherwise run with the test runner's tools.
+
+### Cache keys in tests
+
+Use `s.CacheKeyNonce` in any key a test saves under:
+
+```go
+key := "my-function-" + s.CacheKeyNonce
+```
+
+Keys are write-once, so a round-trip asserted under a fixed key passes on the
+first run and then restores whatever that run left behind. The nonce is stable
+within a sandbox — a save and its restore agree on it — and distinct across
+sandboxes, tests, and job runs.
+
+### Testing against CircleCI's own cache
+
+The in-memory cache mirrors CircleCI's, but only the real one is authoritative.
+`WithLiveCache` offers a sandbox the real cache, and whoever runs the tests
+chooses:
+
+```go
+s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
+if s.LiveCache() {
+    t.Log("running against CircleCI's own cache")
+}
+```
+
+```sh
+# in-memory, the default — a laptop, or a CI job that wants no real dependencies
+go test ./acceptance/...
+
+# CircleCI's own cache — only works as a step inside a CircleCI job
+TOOLKIT_CACHE_MODE=live go test ./acceptance/...
+```
+
+One suite is therefore exact in CI and still runs unchanged on a laptop. If
+`live` is asked for and the real cache is not reachable, the test fails rather
+than quietly using the in-memory one and reporting a pass on a behaviour it
+never exercised.
+
+Live-mode keys are scoped to the job run, so nothing a suite writes is visible
+to another run — which also means each run leaves cache entries behind that
+nothing will restore. Keep the paths small, and prefix the keys with something
+recognisable so they are easy to spot.
+
+`sdk.InCircleCIJob()` reports whether the privileged operations are reachable at
+all, if you need to branch on that yourself.

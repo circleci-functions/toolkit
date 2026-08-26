@@ -303,3 +303,122 @@ func TestServer_SaveCacheStillRunsImmediately(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(content), "kept")
 }
+
+// CircleCI matches a restore key as a prefix, so a function can offer a list of
+// keys that broadens as it goes and warm-start from a near miss.
+func TestServer_RestoreMatchesKeyAsPrefix(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+	dir := dirWith(t, "hit")
+
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-1700000000", []string{dir}))
+	assert.NilError(t, os.RemoveAll(dir))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-abc-"})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dir, "marker"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "hit")
+}
+
+// Among several entries matching a prefix, the most recently saved wins.
+func TestServer_RestorePrefix_TakesMostRecentEntry(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+
+	older := dirWith(t, "older")
+	newer := dirWith(t, "newer")
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-1", []string{older}))
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-2", []string{newer}))
+	assert.NilError(t, os.RemoveAll(older))
+	assert.NilError(t, os.RemoveAll(newer))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-abc-"})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(newer, "marker"))
+	assert.NilError(t, err, "expected the most recently saved matching entry")
+	assert.Equal(t, string(got), "newer")
+
+	_, err = os.Stat(filepath.Join(older, "marker"))
+	assert.Assert(t, os.IsNotExist(err), "the older entry must not have been restored")
+}
+
+// A restore stops at the first key that matches anything, even if a later key
+// would have matched a more recent entry — the order of the list is the
+// function's stated preference.
+func TestServer_RestoreStopsAtFirstMatchingKey(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+
+	exact := dirWith(t, "exact")
+	broader := dirWith(t, "broader")
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-1", []string{exact}))
+	// Saved later, so it would win on recency if the broader key were consulted.
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-zzz-9", []string{broader}))
+	assert.NilError(t, os.RemoveAll(exact))
+	assert.NilError(t, os.RemoveAll(broader))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-abc-", "v1-build-"})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(exact, "marker"))
+	assert.NilError(t, err, "expected the first matching key to win")
+	assert.Equal(t, string(got), "exact")
+
+	_, err = os.Stat(filepath.Join(broader, "marker"))
+	assert.Assert(t, os.IsNotExist(err), "a later key must not be consulted once an earlier one matched")
+}
+
+// A key that is not a prefix of anything saved is a miss, so a restore falls
+// through to the next key in the list.
+func TestServer_RestoreFallsThroughNonMatchingKeys(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+	dir := dirWith(t, "hit")
+
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-1", []string{dir}))
+	assert.NilError(t, os.RemoveAll(dir))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-def-", "v1-build-abc-"})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dir, "marker"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "hit")
+}
+
+// A saved key is a prefix of itself, so an exact round-trip still hits.
+func TestServer_RestoreExactKeyStillHits(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+	dir := dirWith(t, "hit")
+
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc-1", []string{dir}))
+	assert.NilError(t, os.RemoveAll(dir))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-abc-1"})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dir, "marker"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "hit")
+}
+
+// A restore key longer than a saved key is not a prefix of it, so it must not
+// match: keys broaden by getting shorter, never longer.
+func TestServer_RestoreLongerKeyDoesNotMatch(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	ctx := context.Background()
+	dir := dirWith(t, "hit")
+
+	assert.NilError(t, srv.Client().SaveCache(ctx, "v1-build-abc", []string{dir}))
+	assert.NilError(t, os.RemoveAll(dir))
+
+	_, err := srv.Client().RestoreCache(ctx, []string{"v1-build-abc-and-more"})
+	assert.NilError(t, err)
+
+	_, err = os.Stat(filepath.Join(dir, "marker"))
+	assert.Assert(t, os.IsNotExist(err), "a key longer than the saved one must be a miss")
+}

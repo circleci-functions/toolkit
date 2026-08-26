@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -156,6 +157,13 @@ func (s *Server) SavedKeys() []string {
 type cacheEntry struct {
 	paths    []string
 	storeDir string
+	// seq orders entries by the order they were written, so a prefix match can
+	// pick the most recent as CircleCI does.
+	//
+	// A counter rather than a timestamp: two saves in one test can land on the
+	// same clock tick, and a tie would make which entry a prefix restore
+	// returns nondeterministic.
+	seq uint64
 }
 
 // pendingSave is a cache save registered to run at the end of the job.
@@ -183,6 +191,8 @@ type cacheStore struct {
 	storeDir    string
 	pending     []pendingSave
 	mutableKeys bool
+	// seq counts saves, to order entries. See cacheEntry.seq.
+	seq uint64
 }
 
 func (cs *cacheStore) handleSave(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +244,8 @@ func (cs *cacheStore) save(key string, paths []string) error {
 	}
 
 	cs.mu.Lock()
-	cs.entries[key] = &cacheEntry{paths: paths, storeDir: keyDir}
+	cs.seq++
+	cs.entries[key] = &cacheEntry{paths: paths, storeDir: keyDir, seq: cs.seq}
 	cs.mu.Unlock()
 	return nil
 }
@@ -251,8 +262,8 @@ func (cs *cacheStore) handleRestore(w http.ResponseWriter, r *http.Request) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	for _, key := range req.Keys {
-		e, ok := cs.entries[key]
-		if !ok {
+		e := cs.match(key)
+		if e == nil {
 			continue
 		}
 		for i, p := range e.paths {
@@ -264,6 +275,29 @@ func (cs *cacheStore) handleRestore(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	writeResult(w, "success")
+}
+
+// match returns the entry a restore of key gets, or nil for a miss.
+//
+// CircleCI matches a restore key as a prefix and takes the most recently saved
+// entry among those matching, so a function can offer a list of keys that
+// broadens as it goes — an exact key first, then shorter prefixes — and
+// warm-start from a near miss instead of nothing. Callers rely on that, so an
+// exact-match-only fake would report a miss where a job restores an older
+// entry.
+//
+// The caller holds cs.mu.
+func (cs *cacheStore) match(key string) *cacheEntry {
+	var best *cacheEntry
+	for k, e := range cs.entries {
+		if !strings.HasPrefix(k, key) {
+			continue
+		}
+		if best == nil || e.seq > best.seq {
+			best = e
+		}
+	}
+	return best
 }
 
 func writeResult(w http.ResponseWriter, result string) {

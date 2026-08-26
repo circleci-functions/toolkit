@@ -80,6 +80,19 @@ whatever that run left behind — partition the key with something that changes.
 Use `sdktest.WithMutableKeys()` if a test deliberately needs the unrealistic
 behaviour.
 
+It also matches a restore key as a **prefix**, taking the most recently saved
+entry among those matching. A restore tries its keys in order and stops at the
+first that matches anything, so a function can offer a list that broadens as it
+goes and warm-start from a near miss:
+
+```go
+client.RestoreCache(ctx, []string{
+    "v1-build-" + checksum + "-" + window, // exact
+    "v1-build-" + checksum + "-",          // same deps, any window
+    "v1-build-",                           // any deps
+})
+```
+
 `srv.SavedKeys()` returns the keys written so far, so you can assert a function
 partitions its keys the way you intended.
 

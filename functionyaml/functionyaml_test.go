@@ -81,6 +81,64 @@ func TestFromKong(t *testing.T) {
 	assert.Assert(t, ok, "expected a nested cache load command")
 }
 
+// Mirrors setup-go: the root command is a default subcommand, so a function
+// invoked without naming a command accepts that subcommand's flags. Consumers
+// validating a bare invocation need `default` to know where to look.
+func TestFromKongDefaultCommand(t *testing.T) {
+	type installCmd struct {
+		Version string `help:"Version spec." default:"stable"`
+	}
+	type cacheCmd struct {
+		Save struct{} `cmd:"" help:"Save cache."`
+		Load struct{} `cmd:"" default:"withargs" help:"Load cache."`
+	}
+	type cli struct {
+		Debug   bool       `help:"Log verbosely."`
+		Install installCmd `cmd:"" default:"withargs" help:"Install the thing."`
+		Cache   cacheCmd   `cmd:"" help:"Save/restore cache."`
+	}
+
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"))
+	assert.NilError(t, err)
+
+	d := functionyaml.FromKong(k.Model)
+
+	assert.Equal(t, d.Default, "install")
+	assert.Equal(t, d.Commands["cache"].Default, "load")
+	assert.Equal(t, d.Commands["install"].Default, "")
+
+	// Root flags are the ones accepted before any command is named. kong's own
+	// --help is a HelpFlag, not part of the function's surface.
+	byName := map[string]functionyaml.Flag{}
+	for _, f := range d.Flags {
+		byName[f.Name] = f
+	}
+	_, hasHelp := byName["help"]
+	assert.Assert(t, !hasHelp, "kong's --help leaked into the schema")
+	assert.Equal(t, byName["debug"].Type, "bool")
+	assert.Equal(t, len(d.Flags), 1)
+
+	// A root flag stays on the root; it must not be duplicated onto children,
+	// or a consumer would accept it after a command name too.
+	for _, f := range d.Commands["install"].Flags {
+		assert.Assert(t, f.Name != "debug", "root flag leaked onto a subcommand")
+	}
+}
+
+func TestFromKongNoDefaultCommand(t *testing.T) {
+	type cli struct {
+		Install struct{} `cmd:""`
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"))
+	assert.NilError(t, err)
+
+	d := functionyaml.FromKong(k.Model)
+	assert.Equal(t, d.Default, "")
+	assert.Equal(t, len(d.Flags), 0)
+}
+
 func TestFromKongPointerFlag(t *testing.T) {
 	// kong uses *T fields to distinguish "unset" from a zero value.
 	type installCmd struct {
@@ -253,6 +311,56 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			wantErr: `flag "version" has no type`,
+		},
+		{
+			name: "root flag with no type",
+			d: functionyaml.Descriptor{
+				Name:  "widget",
+				Flags: []functionyaml.Flag{{Name: "debug"}},
+			},
+			wantErr: `widget: flag "debug" has no type`,
+		},
+		{
+			name: "duplicate root flag",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Flags: []functionyaml.Flag{
+					{Name: "debug", Type: "bool"},
+					{Name: "debug", Type: "bool"},
+				},
+			},
+			wantErr: `duplicate flag "debug"`,
+		},
+		{
+			name: "default names an unknown command",
+			d: functionyaml.Descriptor{
+				Name:     "widget",
+				Default:  "install",
+				Commands: map[string]functionyaml.Command{"cache": {}},
+			},
+			wantErr: `default names an unknown command "install"`,
+		},
+		{
+			name: "nested default names an unknown command",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Commands: map[string]functionyaml.Command{
+					"cache": {Default: "load", Commands: map[string]functionyaml.Command{"save": {}}},
+				},
+			},
+			wantErr: `widget cache: default names an unknown command "load"`,
+		},
+		{
+			name: "valid defaults",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Default: "install",
+				Flags:   []functionyaml.Flag{{Name: "debug", Type: "bool"}},
+				Commands: map[string]functionyaml.Command{
+					"install": {},
+					"cache":   {Default: "load", Commands: map[string]functionyaml.Command{"load": {}}},
+				},
+			},
 		},
 		{
 			name: "invalid nested subcommand",

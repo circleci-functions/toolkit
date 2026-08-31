@@ -59,8 +59,16 @@ rotation.
 | `client.RestoreCache(ctx, keys)` | `(CacheResult, error)` | Restore the first matching cache key |
 | `client.AtTeardown().SaveCache(ctx, key, paths)` | `error` | Register a cache save to run at the end of the job |
 | `client.AtTeardown().OnFail()`, `.OnSuccess()` | `*Teardown` | Narrow a registration to a job outcome |
+| `sdk.WithStepName(name)` | `CacheOption` | Name the step a save or restore creates |
 
 `sdk.ErrNoServer` is returned when the function is not running inside a CircleCI job. Use `errors.Is(err, sdk.ErrNoServer)` to detect this.
+
+A job shows a cache step as `Saving cache` or `Restoring cache`. Handle more than
+one cache and those steps become indistinguishable, so name them:
+
+```go
+client.RestoreCache(ctx, keys, sdk.WithStepName("Restoring go build cache"))
+```
 
 ### Saving at the end of the job
 

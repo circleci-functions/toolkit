@@ -34,6 +34,7 @@ func (e *ServerError) Error() string {
 type saveRequest struct {
 	Key   string   `json:"key"`
 	Paths []string `json:"paths"`
+	Name  string   `json:"name,omitempty"`
 
 	// Set when the save is registered to run at the end of the job.
 	Teardown bool   `json:"teardown,omitempty"`
@@ -42,6 +43,30 @@ type saveRequest struct {
 
 type restoreRequest struct {
 	Keys []string `json:"keys"`
+	Name string   `json:"name,omitempty"`
+}
+
+// CacheOption configures a cache operation.
+type CacheOption func(*cacheOptions)
+
+type cacheOptions struct {
+	name string
+}
+
+// WithStepName names the step the operation creates, in place of the generic
+// "Saving cache" or "Restoring cache" the job would otherwise show. Worth
+// setting when a function handles more than one cache, since the steps are
+// indistinguishable without it.
+func WithStepName(name string) CacheOption {
+	return func(o *cacheOptions) { o.name = name }
+}
+
+func newCacheOptions(opts []CacheOption) cacheOptions {
+	var o cacheOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
 }
 
 type serverResponse struct {
@@ -55,15 +80,17 @@ type serverResponse struct {
 
 // SaveCache saves paths under key. It returns ErrNoServer if the function
 // isn't running inside a CircleCI job.
-func (c *Client) SaveCache(ctx context.Context, key string, paths []string) error {
-	_, err := c.do(ctx, "/step/cache/save", saveRequest{Key: key, Paths: paths})
+func (c *Client) SaveCache(ctx context.Context, key string, paths []string, opts ...CacheOption) error {
+	o := newCacheOptions(opts)
+	_, err := c.do(ctx, "/step/cache/save", saveRequest{Key: key, Paths: paths, Name: o.name})
 	return err
 }
 
 // RestoreCache restores the cache matching any of keys. It returns
 // ErrNoServer if the function isn't running inside a CircleCI job.
-func (c *Client) RestoreCache(ctx context.Context, keys []string) (CacheResult, error) {
-	resp, err := c.do(ctx, "/step/cache/restore", restoreRequest{Keys: keys})
+func (c *Client) RestoreCache(ctx context.Context, keys []string, opts ...CacheOption) (CacheResult, error) {
+	o := newCacheOptions(opts)
+	resp, err := c.do(ctx, "/step/cache/restore", restoreRequest{Keys: keys, Name: o.name})
 	if err != nil {
 		return CacheResult{}, err
 	}

@@ -17,6 +17,7 @@ import (
 type savePayload struct {
 	Key           string   `json:"key"`
 	Paths         []string `json:"paths"`
+	Name          string   `json:"name"`
 	Teardown      bool     `json:"teardown"`
 	When          string   `json:"when"`
 	IgnoreFailure bool     `json:"ignore_failure"`
@@ -109,4 +110,18 @@ func TestAtTeardown_ConditionDoesNotLeak(t *testing.T) {
 	err := teardown.SaveCache(context.Background(), "my-key", []string{"./cache"})
 	assert.NilError(t, err)
 	assert.Equal(t, got.When, whenAlways)
+}
+
+// TestSaveCache_WithStepName verifies the step name reaches the wire, so a job
+// can label a cache step instead of showing the generic default.
+func TestSaveCache_WithStepName(t *testing.T) {
+	var got savePayload
+	srv := fakepluginserver.New(t)
+	srv.SaveCache(saveRecorder(t, http.StatusAccepted, map[string]any{"deferred": true}, &got))
+	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
+
+	err := client.AtTeardown().SaveCache(context.Background(), "my-key", []string{"./cache"},
+		WithStepName("Saving go build cache"))
+	assert.NilError(t, err)
+	assert.Equal(t, got.Name, "Saving go build cache")
 }

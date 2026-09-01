@@ -196,6 +196,8 @@ func TestReleaser_Release(t *testing.T) {
 				assert.Assert(t, err)
 				assert.Check(t, cmp.Equal(string(b), "0.0.1-dev"))
 				assert.Check(t, cmp.Equal(*resp.TagCount, int32(1)))
+				// Without this a CDN serves the previous version until its TTL expires.
+				assert.Check(t, cmp.Equal(aws.ToString(resp.CacheControl), "max-age=60, must-revalidate"))
 			})
 
 			t.Run("Check tags are present", func(t *testing.T) {

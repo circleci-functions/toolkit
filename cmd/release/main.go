@@ -137,6 +137,7 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 
 	// Direct upload — rel.Publish's Path walk would gzip this as a binary.
 	key := filepath.ToSlash(filepath.Join(namespace, r.name, r.version, "function.yaml"))
+	fmt.Printf("Uploading: %q\n", key)
 	_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &r.bucket,
 		Key:         &key,

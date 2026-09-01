@@ -27,6 +27,11 @@ import (
 var (
 	contentEncodingGZIP    = "gzip"
 	contentTypeOctetStream = "application/octet-stream"
+
+	// releasePointerCacheControl keeps the mutable release pointer fresh at the
+	// CDN, which otherwise keeps serving the previous version until its own TTL
+	// expires. The versioned keys it points at are immutable and unaffected.
+	releasePointerCacheControl = "max-age=60, must-revalidate"
 )
 
 // Releaser is a type that facilitates publishing binaries to S3 in the standard CircleCI release format.
@@ -116,7 +121,8 @@ func (r *Releaser) Release(ctx context.Context, params ReleaseParameters) error 
 		Body:   strings.NewReader(params.Version),
 		Key:    &key,
 
-		Tagging: encodeTags(params.Tags),
+		CacheControl: &releasePointerCacheControl,
+		Tagging:      encodeTags(params.Tags),
 	})
 	return err
 }

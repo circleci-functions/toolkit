@@ -202,6 +202,48 @@ should not inherit. A function that installs a Go toolchain wants `GOROOT`
 cleared, for instance, since a toolchain honours it over its own location and
 would otherwise run with the test runner's tools.
 
+### Unsandboxed test
+
+A Sandbox is what makes a suite safe to run on a laptop, and it is also what
+hides some of what a function does. A function that puts a binary on `PATH` has
+to pick a directory `PATH` already holds, and which directory that is belongs
+to the executor: `~/go/bin` on one image, `/usr/local/bin` on another, the
+directory a preinstalled tool already occupies on a third. Pass `--bin-dir` and
+that choice never happens.
+
+`SkipUnlessInJob` sanctions a test that runs without the sandbox, so it runs
+where the machine is disposable and skips everywhere else:
+
+```go
+func TestPutsToolOnPath(t *testing.T) {
+    sdktest.SkipUnlessInJob(t)
+
+    // No --bin-dir, so the function picks a directory off the real PATH.
+    r := runner.New(t, binaryPath)
+    _, err := r.Run("--version", "1.2.3")
+    assert.NilError(t, err)
+
+    out, err := sdktest.LaterStep(t, "mytool", "--version")
+    assert.NilError(t, err, "a later step could not resolve mytool: %s", out)
+}
+```
+
+`LaterStep` runs a command in a fresh process, resolving it through `PATH` —
+which is what a later step in the same job amounts to once a function stops
+exporting to a shell. It catches the case where a function's effect reached the
+step that ran it and nothing after.
+
+It drops `$GOROOT`, for the reason the previous section gives. To check a shell
+a function's exports never reach, run that shell as the command:
+
+```go
+out, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "mytool --version")
+```
+
+Between them these need a job because they are deliberately destructive: a
+function that takes over a directory on `PATH` will take over the one on your
+machine.
+
 ### Cache keys in tests
 
 Use `s.CacheKeyNonce` in any key a test saves under:

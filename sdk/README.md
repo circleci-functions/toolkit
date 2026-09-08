@@ -213,13 +213,16 @@ without one, so it runs only where the machine is disposable:
 func TestPutsToolOnPath(t *testing.T) {
     sdktest.SkipUnlessInJob(t)
 
-    // No --bin-dir, so the function picks a directory off the real PATH.
-    r := runner.New(t, binaryPath)
-    _, err := r.Run("--version", "1.2.3")
-    assert.NilError(t, err)
+    // No --bin-dir, so the function picks a directory off the real PATH — and
+    // the environment it picks from has to be the job's own, $HOME included.
+    cmd := exec.CommandContext(t.Context(), binaryPath, "--version", "1.2.3")
+    cmd.Env = os.Environ()
 
-    out, err := sdktest.LaterStep(t, "mytool", "--version")
-    assert.NilError(t, err, "a later step could not resolve mytool: %s", out)
+    out, err := cmd.CombinedOutput()
+    assert.NilError(t, err, string(out))
+
+    resolved, err := sdktest.LaterStep(t, "mytool", "--version")
+    assert.NilError(t, err, "a later step could not resolve mytool: %s", resolved)
 }
 ```
 

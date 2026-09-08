@@ -202,6 +202,41 @@ should not inherit. A function that installs a Go toolchain wants `GOROOT`
 cleared, for instance, since a toolchain honours it over its own location and
 would otherwise run with the test runner's tools.
 
+### Unsandboxed test
+
+A sandbox is also what hides where a function puts things: pass `--bin-dir` and
+the choice of directory on `PATH` — `~/go/bin` on one image, `/usr/local/bin`
+on another — never happens. `SkipUnlessInJob` sanctions a test that runs
+without one, so it runs only where the machine is disposable:
+
+```go
+func TestPutsToolOnPath(t *testing.T) {
+    sdktest.SkipUnlessInJob(t)
+
+    // No --bin-dir, so the function picks a directory off the real PATH — and
+    // the environment it picks from has to be the job's own, $HOME included.
+    cmd := exec.CommandContext(t.Context(), binaryPath, "--version", "1.2.3")
+    cmd.Env = os.Environ()
+
+    out, err := cmd.CombinedOutput()
+    assert.NilError(t, err, string(out))
+
+    resolved, err := sdktest.LaterStep(t, "mytool", "--version")
+    assert.NilError(t, err, "a later step could not resolve mytool: %s", resolved)
+}
+```
+
+`LaterStep` resolves a command through `PATH` in a fresh process, which is what
+a later step amounts to once a function stops exporting to a shell. It passes
+the job's environment through and drops only `$GOROOT`, which the go command
+sets for the test process when `go.mod` asks for a toolchain other than the
+installed one. Run a shell as the command to check one a function's exports
+never reach:
+
+```go
+out, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "mytool --version")
+```
+
 ### Cache keys in tests
 
 Use `s.CacheKeyNonce` in any key a test saves under:

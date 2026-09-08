@@ -7,7 +7,8 @@ first-party, versioned step implementations invoked via `circleci run <name>@<ve
 
 | Package | Purpose |
 |---|---|
-| [`bashenv`](bashenv) | Append shell exports to `$BASH_ENV`, and read them back |
+| [`bashenv`](bashenv) | Append shell exports to `$BASH_ENV`, and read them back. Still the only way to export an arbitrary variable to later steps; use `pathlink` for putting a binary on `PATH` |
+| [`pathlink`](pathlink) | Make a binary resolvable by name for the rest of a job, without a shell |
 | [`sdk`](sdk) | Perform privileged CircleCI job operations (cache save/restore, etc.) without holding credentials |
 | [`sdk/sdktest`](sdk/sdktest) | In-memory cache and test sandbox for functions that use `sdk` |
 | [`functionyaml`](functionyaml) | Define, build, and validate the `function.yaml` schema |

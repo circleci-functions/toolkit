@@ -323,3 +323,20 @@ func TestEnsure_LinksAliasesUnderTheirOwnName(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, target, filepath.Join(from, tool), "the alias runs the target, under its own name")
 }
+
+// A caller whose binary is always on PATH — python3, say — would otherwise
+// take the early return and never get its aliases.
+func TestEnsure_LinksAliasesEvenWhenTheBinaryAlreadyResolves(t *testing.T) {
+	from := fakeTool(t)
+
+	opts := options(from, pathlink.Options{Path: from})
+	opts.Aliases = map[string]string{"othertool": tool}
+
+	got, err := pathlink.Ensure(opts)
+	assert.NilError(t, err)
+	assert.Equal(t, got.Dir, from)
+
+	target, err := os.Readlink(filepath.Join(from, "othertool"))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(from, tool))
+}

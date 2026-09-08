@@ -69,8 +69,10 @@ func Ensure(opts Options) (Result, error) {
 		return Result{Dir: opts.Dir}, nil
 	}
 
-	// Already resolvable: the caller's own copy is on PATH, or a rerun.
-	if dir, err := verify(dirs, opts, ""); err == nil {
+	// Already resolvable, with nothing left to add: the caller's own copy is on
+	// PATH, or a rerun. Aliases have to be there too, or a caller whose binary
+	// was always on PATH would never get them.
+	if dir, err := verify(dirs, opts, ""); err == nil && resolveAll(dirs, opts.Aliases) {
 		return Result{Dir: dir, Verified: true}, nil
 	}
 
@@ -111,6 +113,16 @@ func verify(dirs []string, opts Options, wantDir string) (string, error) {
 		return dirs[i], errors.New("no Verify to confirm which copy is on PATH")
 	}
 	return dirs[i], nil
+}
+
+// resolveAll reports whether every alias is already on PATH.
+func resolveAll(dirs []string, aliases map[string]string) bool {
+	for alias := range aliases {
+		if IndexOf(dirs, alias) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // SearchDirs splits path, dropping relative entries: those resolve against

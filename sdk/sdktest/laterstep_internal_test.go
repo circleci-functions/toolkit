@@ -7,8 +7,7 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-// SkipUnlessInJob's decision, without the t.Skip that makes it unobservable
-// from a test.
+// SkipUnlessInJob's decision, without the t.Skip that hides it from a test.
 func TestSkipReason(t *testing.T) {
 	assert.Equal(t, skipReason(true), "", "inside a job there is nothing to skip")
 

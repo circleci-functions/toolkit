@@ -11,9 +11,8 @@ import (
 	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
-// skipUnlessSh skips tests that need a POSIX shell to stand in for a command
-// on PATH. sdktest itself is exercised on Linux and macOS; what it does for a
-// function author on Windows is covered by that author's own suite.
+// skipUnlessSh skips tests needing a POSIX shell to stand in for a command on
+// PATH.
 func skipUnlessSh(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -29,9 +28,8 @@ func TestLaterStep_RunsInAFreshProcess(t *testing.T) {
 	assert.Equal(t, strings.TrimSpace(out), "resolved")
 }
 
-// A Go toolchain honours $GOROOT over its own location, and `go test` exports
-// it to the test process. Passing it on would let a suite resolve the toolchain
-// that ran the tests while reporting that it resolved the one under test.
+// Passing $GOROOT on would let a suite resolve the toolchain that ran the tests
+// while reporting it resolved the one under test.
 func TestLaterStep_DropsGoRoot(t *testing.T) {
 	skipUnlessSh(t)
 	t.Setenv("GOROOT", "/somewhere/that/would/win")
@@ -51,8 +49,7 @@ func TestLaterStep_PassesTheRestOfTheEnvironment(t *testing.T) {
 	assert.Equal(t, strings.TrimSpace(out), "kept")
 }
 
-// The failure a caller is usually asserting against: the function under test
-// put nothing on PATH, so a later step cannot find it by name.
+// The failure a caller is usually asserting against: nothing on PATH to find.
 func TestLaterStep_ReportsANameThatIsNotOnPath(t *testing.T) {
 	_, err := sdktest.LaterStep(t, "sdktest-no-such-command")
 	assert.Assert(t, err != nil, "expected an error for a command that is not on PATH")
@@ -66,7 +63,7 @@ func TestLaterStep_ReportsTheCommandsOwnFailure(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "to stderr"), "combined output must include stderr, got %q", out)
 }
 
-// Guards the doc comment's claim that the helper leaves the test process alone.
+// The helper leaves the test process's own environment alone.
 func TestLaterStep_DoesNotChangeTheTestProcessEnvironment(t *testing.T) {
 	skipUnlessSh(t)
 	t.Setenv("GOROOT", "/still/here")

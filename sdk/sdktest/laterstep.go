@@ -12,12 +12,9 @@ import (
 
 // SkipUnlessInJob skips t unless it is running as a step inside a CircleCI job.
 //
-// A Sandbox keeps a function under test from writing outside temp directories,
-// which is what makes a suite safe to run on a laptop. Some of what a function
-// does only happens without one: a function that puts a binary on PATH has to
-// pick a directory PATH already holds, and which directory that is belongs to
-// the executor rather than the sandbox. A test for that has to run unsandboxed,
-// so it can only run where the machine is disposable.
+// For a test that has to run without a Sandbox — the directory a function picks
+// off PATH belongs to the executor, not the sandbox — and so is only safe where
+// the machine is disposable.
 func SkipUnlessInJob(t *testing.T) {
 	t.Helper()
 	if reason := skipReason(sdk.InCircleCIJob()); reason != "" {
@@ -34,20 +31,14 @@ func skipReason(inJob bool) string {
 }
 
 // LaterStep runs name with args in a fresh process, resolving name through
-// PATH, and returns its combined output.
+// PATH, and returns its combined output. That is what a later step in the same
+// job amounts to for a function that exports nothing to a shell.
 //
-// That is what a later step in the same job amounts to for a function that puts
-// something on PATH without exporting anything to a shell: a new process that
-// sourced nothing and looks the name up. Asserting on it catches a function
-// whose effect reached the step that ran it and nothing after.
+// $GOROOT is dropped: `go test` exports it, and a Go toolchain honours it over
+// its own location, so passing it on can resolve the toolchain that ran the
+// tests instead of the one under test.
 //
-// $GOROOT is dropped from the child's environment. `go test` exports it to the
-// test process, and a Go toolchain honours it over its own location, so a suite
-// that left it set could pass while resolving the toolchain that ran the tests
-// rather than the one under test.
-//
-// To check a shell that a function's exports never reach — PowerShell on
-// Windows, where $BASH_ENV does nothing — run that shell as the command:
+// Run a shell as the command to check one a function's exports never reach:
 //
 //	out, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "mytool --version")
 func LaterStep(t *testing.T, name string, args ...string) (string, error) {
@@ -60,8 +51,8 @@ func LaterStep(t *testing.T, name string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// withoutVars returns env without the named variables, dropping them rather
-// than emptying them so a child cannot tell them apart from unset.
+// withoutVars drops the named variables rather than emptying them, so a child
+// cannot tell them from unset.
 func withoutVars(env []string, names ...string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

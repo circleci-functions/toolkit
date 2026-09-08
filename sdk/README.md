@@ -204,15 +204,10 @@ would otherwise run with the test runner's tools.
 
 ### Unsandboxed test
 
-A Sandbox is what makes a suite safe to run on a laptop, and it is also what
-hides some of what a function does. A function that puts a binary on `PATH` has
-to pick a directory `PATH` already holds, and which directory that is belongs
-to the executor: `~/go/bin` on one image, `/usr/local/bin` on another, the
-directory a preinstalled tool already occupies on a third. Pass `--bin-dir` and
-that choice never happens.
-
-`SkipUnlessInJob` sanctions a test that runs without the sandbox, so it runs
-where the machine is disposable and skips everywhere else:
+A sandbox is also what hides where a function puts things: pass `--bin-dir` and
+the choice of directory on `PATH` — `~/go/bin` on one image, `/usr/local/bin`
+on another — never happens. `SkipUnlessInJob` sanctions a test that runs
+without one, so it runs only where the machine is disposable:
 
 ```go
 func TestPutsToolOnPath(t *testing.T) {
@@ -228,21 +223,14 @@ func TestPutsToolOnPath(t *testing.T) {
 }
 ```
 
-`LaterStep` runs a command in a fresh process, resolving it through `PATH` —
-which is what a later step in the same job amounts to once a function stops
-exporting to a shell. It catches the case where a function's effect reached the
-step that ran it and nothing after.
-
-It drops `$GOROOT`, for the reason the previous section gives. To check a shell
-a function's exports never reach, run that shell as the command:
+`LaterStep` resolves a command through `PATH` in a fresh process, which is what
+a later step amounts to once a function stops exporting to a shell. It drops
+`$GOROOT`, for the reason the previous section gives. Run a shell as the command
+to check one a function's exports never reach:
 
 ```go
 out, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "mytool --version")
 ```
-
-Between them these need a job because they are deliberately destructive: a
-function that takes over a directory on `PATH` will take over the one on your
-machine.
 
 ### Cache keys in tests
 

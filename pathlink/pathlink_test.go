@@ -306,3 +306,20 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, !pathlink.Writable(dir))
 	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child")))
 }
+
+// Aliases replace a shell alias, which only bash would have seen. setup-python
+// needs `python` to run python3.
+func TestEnsure_LinksAliasesUnderTheirOwnName(t *testing.T) {
+	from := fakeTool(t)
+	dir := t.TempDir()
+
+	opts := options(from, pathlink.Options{Dir: dir, Path: dir})
+	opts.Aliases = map[string]string{"othertool": tool}
+
+	_, err := pathlink.Ensure(opts)
+	assert.NilError(t, err)
+
+	target, err := os.Readlink(filepath.Join(dir, "othertool"))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(from, tool), "the alias runs the target, under its own name")
+}

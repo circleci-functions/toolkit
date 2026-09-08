@@ -34,9 +34,11 @@ func skipReason(inJob bool) string {
 // PATH, and returns its combined output. That is what a later step in the same
 // job amounts to for a function that exports nothing to a shell.
 //
-// $GOROOT is dropped: `go test` exports it, and a Go toolchain honours it over
-// its own location, so passing it on can resolve the toolchain that ran the
-// tests instead of the one under test.
+// $GOROOT is dropped, whatever the function installs: the go command sets it
+// for the test process whenever go.mod asks for a toolchain other than the
+// installed one, and a Go toolchain honours it over its own location. Passing
+// it on lets a suite resolve the toolchain that ran the tests. Everything the
+// job itself provides is passed through, since a later step would have it.
 //
 // Run a shell as the command to check one a function's exports never reach:
 //

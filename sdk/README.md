@@ -227,9 +227,11 @@ func TestPutsToolOnPath(t *testing.T) {
 ```
 
 `LaterStep` resolves a command through `PATH` in a fresh process, which is what
-a later step amounts to once a function stops exporting to a shell. It drops
-`$GOROOT`, for the reason the previous section gives. Run a shell as the command
-to check one a function's exports never reach:
+a later step amounts to once a function stops exporting to a shell. It passes
+the job's environment through and drops only `$GOROOT`, which the go command
+sets for the test process when `go.mod` asks for a toolchain other than the
+installed one. Run a shell as the command to check one a function's exports
+never reach:
 
 ```go
 out, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "mytool --version")

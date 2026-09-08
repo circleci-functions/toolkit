@@ -24,6 +24,10 @@ type Options struct {
 	Names []string
 	// FromDir holds them.
 	FromDir string
+	// Aliases are extra names to make resolvable, each mapped to the name in
+	// FromDir it should run. A symlink where a shell alias would only have
+	// worked in bash: setup-python needs `python` to run python3.
+	Aliases map[string]string
 	// Preferred are directories to try before scanning PATH, best first. A
 	// tool's own bin directory belongs at the front; see UserBinDirs.
 	Preferred []string
@@ -59,7 +63,7 @@ func Ensure(opts Options) (Result, error) {
 	dirs := SearchDirs(opts.Path)
 
 	if opts.Dir != "" {
-		if err := linkInto(opts.Dir, opts.FromDir, opts.Names, false); err != nil {
+		if err := linkInto(opts.Dir, opts.FromDir, opts.Names, opts.Aliases, false); err != nil {
 			return Result{}, err
 		}
 		return Result{Dir: opts.Dir}, nil
@@ -75,7 +79,7 @@ func Ensure(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
 			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
 	}
-	if err := linkInto(dir, opts.FromDir, opts.Names, elevate); err != nil {
+	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, elevate); err != nil {
 		return Result{}, err
 	}
 

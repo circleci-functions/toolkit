@@ -21,23 +21,34 @@ func Command(bin string, args ...string) *exec.Cmd {
 	}
 }
 
-// linkInto points dir/name at fromDir/name for each name, with sudo when
-// elevate is set.
+// linkInto points dir/name at fromDir/name for each name, plus dir/alias at
+// fromDir/target for each alias, with sudo when elevate is set.
 //
 // A symlink rather than a copy: a tool that locates its own installation from
 // its executable path resolves symlinks on the way, where a copy would look
 // beside itself.
-func linkInto(dir, fromDir string, names []string, elevate bool) error {
+func linkInto(dir, fromDir string, names []string, aliases map[string]string, elevate bool) error {
 	if !elevate {
 		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // a directory on PATH is readable by design
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
-	for _, name := range names {
-		src := filepath.Join(fromDir, exeName(name))
-		dst := filepath.Join(dir, exeName(name))
+	link := func(from, as string) error {
+		src := filepath.Join(fromDir, exeName(from))
+		dst := filepath.Join(dir, exeName(as))
 		if err := linkFile(src, dst, elevate); err != nil {
 			return fmt.Errorf("link %s: %w", dst, err)
+		}
+		return nil
+	}
+	for _, name := range names {
+		if err := link(name, name); err != nil {
+			return err
+		}
+	}
+	for alias, target := range aliases {
+		if err := link(target, alias); err != nil {
+			return err
 		}
 	}
 	return nil

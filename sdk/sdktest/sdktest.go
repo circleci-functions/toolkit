@@ -24,10 +24,12 @@ import (
 
 // Server is an in-memory cache a function under test can save to and restore
 // from. Its behaviour mirrors CircleCI's, including write-once keys and saves
-// registered to run at the end of the job.
+// registered to run at the end of the job. It also records the outputs a
+// function sets.
 type Server struct {
-	srv   *httptest.Server
-	cache *cacheStore
+	srv     *httptest.Server
+	cache   *cacheStore
+	outputs *outputStore
 }
 
 // Option configures a Server.
@@ -57,11 +59,14 @@ func NewServer(t *testing.T, opts ...Option) *Server {
 		opt(cs)
 	}
 
+	outs := &outputStore{values: make(map[string]any)}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/step/cache/save", cs.handleSave)
 	mux.HandleFunc("/step/cache/restore", cs.handleRestore)
+	mux.HandleFunc("/step/output/set", outs.handleSet)
 
-	s := &Server{srv: httptest.NewServer(mux), cache: cs}
+	s := &Server{srv: httptest.NewServer(mux), cache: cs, outputs: outs}
 	t.Cleanup(s.srv.Close)
 	return s
 }

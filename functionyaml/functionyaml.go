@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
 
 	"github.com/alecthomas/kong"
 	"go.yaml.in/yaml/v4"
@@ -21,7 +22,17 @@ type Descriptor struct {
 	Version     string             `yaml:"version,omitempty"`
 	Default     string             `yaml:"default,omitempty"`
 	Flags       []Flag             `yaml:"flags,omitempty"`
+	Outputs     []Output           `yaml:"outputs,omitempty"`
 	Commands    map[string]Command `yaml:"commands,omitempty"`
+}
+
+// Output describes a value the function sets for later steps to read. Outputs
+// belong to the function, so every command shares them.
+type Output struct {
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`
+	Description string `yaml:"description,omitempty"`
+	Secret      bool   `yaml:"secret,omitempty"`
 }
 
 // Command describes one CLI subcommand, which may itself nest subcommands.
@@ -130,20 +141,38 @@ func builtinFlag(f *kong.Flag) bool {
 	return t.PkgPath() == kongPkgPath
 }
 
-// flagType returns a flag's Go kind, unwrapping kong's *T fields.
+// flagType returns a flag's Go kind, unwrapping kong's *T fields. A []string
+// is a list, the name outputs use for the same type. Any other slice is []
+// and its element kind, since readers take the legacy "slice" as []string.
 func flagType(target reflect.Value) string {
 	t := target.Type()
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
+	}
+	if t.Kind() == reflect.Slice {
+		if t.Elem().Kind() == reflect.String {
+			return "list"
+		}
+		return "[]" + t.Elem().Kind().String()
 	}
 	return t.Kind().String()
 }
 
 // Embed adds a hidden --describe flag that prints the schema and exits
 // during Parse, before any command runs — same mechanism as VersionFlag.
-func Embed() kong.Option {
-	return kong.Embed(&describeFlag{})
+// Pass the outputs the function sets, if any, to include them in the schema.
+func Embed(outputs ...Output) kong.Option {
+	return kong.OptionFunc(func(k *kong.Kong) error {
+		if err := kong.Embed(&describeFlag{}).Apply(k); err != nil {
+			return err
+		}
+		return kong.Bind(describedOutputs(outputs)).Apply(k)
+	})
 }
+
+// describedOutputs carries Embed's outputs to the --describe hook. A type of
+// its own so it cannot collide with anything the function binds.
+type describedOutputs []Output
 
 type describeFlag struct {
 	Describe describeAction `hidden:"" help:"Print this function's schema and exit."`
@@ -153,8 +182,10 @@ type describeAction bool
 
 // BeforeReset only fires when --describe is in argv; field values aren't
 // applied yet, so d itself isn't checked here — same as VersionFlag.
-func (d describeAction) BeforeReset(app *kong.Kong) error {
-	if err := Write(app.Stdout, FromKong(app.Model)); err != nil {
+func (d describeAction) BeforeReset(app *kong.Kong, outputs describedOutputs) error {
+	desc := FromKong(app.Model)
+	desc.Outputs = outputs
+	if err := Write(app.Stdout, desc); err != nil {
 		return err
 	}
 	app.Exit(0)
@@ -168,13 +199,16 @@ func Write(w io.Writer, d Descriptor) error {
 	return enc.Encode(d)
 }
 
-// Validate checks d has a name, and every command/flag is named and typed,
-// with no duplicate flags.
+// Validate checks d has a name, every command/flag is named and typed with no
+// duplicate flags, and every output has a valid, unique name and type.
 func Validate(d Descriptor) error {
 	if d.Name == "" {
 		return fmt.Errorf("name is required")
 	}
 	if err := validateFlags(d.Flags, d.Name); err != nil {
+		return err
+	}
+	if err := validateOutputs(d.Outputs, d.Name); err != nil {
 		return err
 	}
 	if d.Default != "" {
@@ -220,6 +254,27 @@ func validateFlags(flags []Flag, path string) error {
 		seen[f.Name] = true
 		if f.Type == "" {
 			return fmt.Errorf("%s: flag %q has no type", path, f.Name)
+		}
+	}
+	return nil
+}
+
+var outputName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+var outputTypes = map[string]bool{"string": true, "bool": true, "int": true, "list": true}
+
+func validateOutputs(outputs []Output, path string) error {
+	seen := make(map[string]bool, len(outputs))
+	for _, o := range outputs {
+		if !outputName.MatchString(o.Name) {
+			return fmt.Errorf("%s: output name %q must be letters, digits, - and _, starting with a letter", path, o.Name)
+		}
+		if seen[o.Name] {
+			return fmt.Errorf("%s: duplicate output %q", path, o.Name)
+		}
+		seen[o.Name] = true
+		if !outputTypes[o.Type] {
+			return fmt.Errorf("%s: output %q has type %q, must be string, bool, int or list", path, o.Name, o.Type)
 		}
 	}
 	return nil

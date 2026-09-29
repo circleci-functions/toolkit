@@ -25,8 +25,8 @@ type Server struct {
 }
 
 // New starts a Server on a Unix domain socket in a fresh temp directory.
-// Use SaveCache and RestoreCache to configure how it responds to those
-// routes. The server is stopped on test cleanup.
+// Use SaveCache, RestoreCache and SetOutput to configure how it responds to
+// those routes. The server is stopped on test cleanup.
 func New(t *testing.T) *Server {
 	t.Helper()
 	dir := Dir(t)
@@ -56,6 +56,11 @@ func (s *Server) SaveCache(handler http.Handler) {
 // RestoreCache serves handler for the /step/cache/restore route.
 func (s *Server) RestoreCache(handler http.Handler) {
 	s.mux.Handle("/step/cache/restore", handler)
+}
+
+// SetOutput serves handler for the /step/output/set route.
+func (s *Server) SetOutput(handler http.Handler) {
+	s.mux.Handle("/step/output/set", handler)
 }
 
 // Dir returns a fresh temp directory suitable for a socket, without

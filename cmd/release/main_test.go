@@ -33,3 +33,33 @@ func TestValidateVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestMarshalDescriptor_KeepsOutputs(t *testing.T) {
+	in := []byte(`name: widget
+outputs:
+  - name: digest
+    type: string
+  - name: tags
+    type: list
+`)
+	out, err := marshalDescriptor(in, "v1.0.0")
+	assert.NilError(t, err)
+	assert.Equal(t, string(out), `name: widget
+version: v1.0.0
+outputs:
+    - name: digest
+      type: string
+    - name: tags
+      type: list
+`)
+}
+
+func TestMarshalDescriptor_RejectsInvalidOutput(t *testing.T) {
+	in := []byte(`name: widget
+outputs:
+  - name: digest
+    type: object
+`)
+	_, err := marshalDescriptor(in, "v1.0.0")
+	assert.ErrorContains(t, err, `invalid function.yaml: widget: output "digest" has type "object"`)
+}

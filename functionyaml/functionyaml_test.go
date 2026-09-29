@@ -161,6 +161,31 @@ func TestFromKongPointerFlag(t *testing.T) {
 	assert.Equal(t, byName["count"].Type, "int")
 }
 
+func TestFromKongSliceFlag(t *testing.T) {
+	type installCmd struct {
+		Tags     []string  `help:"Tags."`
+		Packages *[]string `help:"Packages."`
+		Ports    []int     `help:"Ports."`
+		Toggles  []bool    `help:"Toggles."`
+	}
+	type cli struct {
+		Install installCmd `cmd:""`
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"))
+	assert.NilError(t, err)
+
+	d := functionyaml.FromKong(k.Model)
+	byName := map[string]functionyaml.Flag{}
+	for _, f := range d.Commands["install"].Flags {
+		byName[f.Name] = f
+	}
+	assert.Equal(t, byName["tags"].Type, "list")
+	assert.Equal(t, byName["packages"].Type, "list")
+	assert.Equal(t, byName["ports"].Type, "[]int")
+	assert.Equal(t, byName["toggles"].Type, "[]bool")
+}
+
 func TestFromKongUninterpolatedDefault(t *testing.T) {
 	type installCmd struct {
 		InstallDir string `help:"Install dir." default:"${install_dir}"`
@@ -226,6 +251,53 @@ func TestEmbedDescribeNoDefaultSubcommand(t *testing.T) {
 	_, _ = k.Parse([]string{"--describe"})
 	assert.Equal(t, exitCode, 0)
 	assert.Assert(t, buf.Len() > 0)
+}
+
+func TestEmbedDescribeOutputs(t *testing.T) {
+	type cli struct {
+		Push struct{} `cmd:"" default:"withargs"`
+	}
+	outputs := []functionyaml.Output{
+		{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+		{Name: "tags", Type: "list"},
+		{Name: "token", Type: "string", Secret: true},
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"), functionyaml.Embed(outputs...))
+	assert.NilError(t, err)
+
+	var buf bytes.Buffer
+	k.Stdout = &buf
+	k.Exit = func(int) {}
+
+	_, err = k.Parse([]string{"--describe"})
+	assert.NilError(t, err)
+
+	var d functionyaml.Descriptor
+	assert.NilError(t, yaml.Unmarshal(buf.Bytes(), &d))
+	assert.DeepEqual(t, d.Outputs, outputs)
+	assert.NilError(t, functionyaml.Validate(d))
+}
+
+func TestEmbedDescribeNoOutputs(t *testing.T) {
+	type cli struct {
+		Push struct{} `cmd:"" default:"withargs"`
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"), functionyaml.Embed())
+	assert.NilError(t, err)
+
+	var buf bytes.Buffer
+	k.Stdout = &buf
+	k.Exit = func(int) {}
+
+	_, err = k.Parse([]string{"--describe"})
+	assert.NilError(t, err)
+
+	var raw map[string]any
+	assert.NilError(t, yaml.Unmarshal(buf.Bytes(), &raw))
+	_, ok := raw["outputs"]
+	assert.Assert(t, !ok, "a function without outputs should omit the key")
 }
 
 func TestEmbedDescribeAbsent(t *testing.T) {
@@ -363,6 +435,77 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "valid outputs",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Outputs: []functionyaml.Output{
+					{Name: "digest", Type: "string"},
+					{Name: "is-new", Type: "bool"},
+					{Name: "retry_count", Type: "int"},
+					{Name: "Tags2", Type: "list", Secret: true},
+				},
+			},
+		},
+		{
+			name: "output with no name",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Type: "string"}},
+			},
+			wantErr: `widget: output name "" must be letters, digits, - and _, starting with a letter`,
+		},
+		{
+			name: "output name starting with a digit",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "1digest", Type: "string"}},
+			},
+			wantErr: `output name "1digest" must be`,
+		},
+		{
+			name: "output name starting with a dash",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "-digest", Type: "string"}},
+			},
+			wantErr: `output name "-digest" must be`,
+		},
+		{
+			name: "output name with a dot",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "image.digest", Type: "string"}},
+			},
+			wantErr: `output name "image.digest" must be`,
+		},
+		{
+			name: "duplicate output",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Outputs: []functionyaml.Output{
+					{Name: "digest", Type: "string"},
+					{Name: "digest", Type: "list"},
+				},
+			},
+			wantErr: `widget: duplicate output "digest"`,
+		},
+		{
+			name: "output with no type",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "digest"}},
+			},
+			wantErr: `widget: output "digest" has type "", must be string, bool, int or list`,
+		},
+		{
+			name: "output typed as a flag kind",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "tags", Type: "slice"}},
+			},
+			wantErr: `output "tags" has type "slice"`,
+		},
+		{
 			name: "invalid nested subcommand",
 			d: functionyaml.Descriptor{
 				Name: "widget",
@@ -399,6 +542,10 @@ func TestWrite(t *testing.T) {
 					{Name: "version", Type: "string", Default: "stable", Description: "Version spec."},
 				},
 			},
+		},
+		Outputs: []functionyaml.Output{
+			{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+			{Name: "token", Type: "string", Secret: true},
 		},
 	}
 

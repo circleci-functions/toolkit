@@ -60,6 +60,7 @@ rotation.
 | `client.AtTeardown().SaveCache(ctx, key, paths)` | `error` | Register a cache save to run at the end of the job |
 | `client.AtTeardown().OnFail()`, `.OnSuccess()` | `*Teardown` | Narrow a registration to a job outcome |
 | `sdk.WithStepName(name)` | `CacheOption` | Name the step a save or restore creates |
+| `client.SetOutput(ctx, name, value)` | `error` | Set an output for later steps to read |
 
 `sdk.ErrNoServer` is returned when the function is not running inside a CircleCI job. Use `errors.Is(err, sdk.ErrNoServer)` to detect this.
 
@@ -95,6 +96,29 @@ Use `OnFail` or `OnSuccess` to register work for one job outcome only, for examp
 client.AtTeardown().OnFail().SaveCache(ctx, key, paths)
 ```
 
+### Setting outputs
+
+A function hands values to later steps by setting outputs. Declare them when
+embedding `--describe`, so they are published in `function.yaml`:
+
+```go
+kong.Parse(&cli, functionyaml.Embed(
+    functionyaml.Output{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+    functionyaml.Output{Name: "tags", Type: "list"},
+))
+```
+
+Then set them while the function runs. A value is a `string`, `bool`, `int` or
+`[]string`, matching the declared type (`list` for `[]string`):
+
+```go
+client.SetOutput(ctx, "digest", digest)
+client.SetOutput(ctx, "tags", []string{"api:1.2.3", "api:latest"})
+```
+
+A later step reads them with `${{ steps.<id>.outputs.<name> }}`. Setting an
+output that is not declared, or a value of the wrong type, fails the step.
+
 ## Testing
 
 `sdktest` gives you an in-memory cache and a sandbox, and needs nothing beyond
@@ -121,7 +145,9 @@ func TestRun(t *testing.T) {
 ```
 
 `srv.SavedKeys()` returns what the function saved, so you can assert it
-partitions its keys the way you intended.
+partitions its keys the way you intended. `srv.Outputs()` returns the outputs
+it set, by name. The fake does not know your `function.yaml`, so it accepts any
+name; assert on the names to check they match what you declare.
 
 The in-memory cache mirrors CircleCI's behaviour:
 

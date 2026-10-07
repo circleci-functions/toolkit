@@ -15,10 +15,15 @@ import (
 // Flags and Default describe invoking the function without naming a command:
 // Flags are accepted there directly, and Default names the command that runs
 // when none is given, whose own flags are accepted there too.
+//
+// Example is the config a user writes to run the function, rendered by
+// RenderExample from the flags' example values; it is derived, so a release
+// overwrites any value already set.
 type Descriptor struct {
 	Name        string             `yaml:"name"`
 	Description string             `yaml:"description,omitempty"`
 	Version     string             `yaml:"version,omitempty"`
+	Example     string             `yaml:"example,omitempty"`
 	Default     string             `yaml:"default,omitempty"`
 	Flags       []Flag             `yaml:"flags,omitempty"`
 	Commands    map[string]Command `yaml:"commands,omitempty"`
@@ -35,6 +40,10 @@ type Command struct {
 }
 
 // Flag describes one command-line flag. Hidden flags are never included.
+//
+// Example is a value to show for the flag in the descriptor's Example, read
+// from an `example:"..."` struct tag. A required flag the root command accepts
+// must have one, since the rendered step has to pass it.
 type Flag struct {
 	Name        string   `yaml:"name"`
 	Short       string   `yaml:"short,omitempty"`
@@ -44,6 +53,7 @@ type Flag struct {
 	Enum        []string `yaml:"enum,omitempty"`
 	Env         []string `yaml:"env,omitempty"`
 	Negatable   bool     `yaml:"negatable,omitempty"`
+	Example     string   `yaml:"example,omitempty"`
 	Description string   `yaml:"description,omitempty"`
 }
 
@@ -100,6 +110,9 @@ func flagsFromNode(node *kong.Node) []Flag {
 			Negatable:   f.Tag != nil && f.Tag.Negatable != "",
 			Description: f.Help,
 		}
+		if f.Tag != nil {
+			flag.Example = f.Tag.Get("example")
+		}
 		if f.Short != 0 {
 			flag.Short = string(f.Short)
 		}
@@ -154,7 +167,13 @@ type describeAction bool
 // BeforeReset only fires when --describe is in argv; field values aren't
 // applied yet, so d itself isn't checked here — same as VersionFlag.
 func (d describeAction) BeforeReset(app *kong.Kong) error {
-	if err := Write(app.Stdout, FromKong(app.Model)); err != nil {
+	desc := FromKong(app.Model)
+	example, err := RenderExample(desc, localRef(desc.Name))
+	if err != nil {
+		return err
+	}
+	desc.Example = example
+	if err := Write(app.Stdout, desc); err != nil {
 		return err
 	}
 	app.Exit(0)
@@ -181,6 +200,9 @@ func Validate(d Descriptor) error {
 		if _, ok := d.Commands[d.Default]; !ok {
 			return fmt.Errorf("%s: default names an unknown command %q", d.Name, d.Default)
 		}
+	}
+	if err := validateExample(d); err != nil {
+		return err
 	}
 	return validateCommands(d.Commands, d.Name)
 }
@@ -220,6 +242,27 @@ func validateFlags(flags []Flag, path string) error {
 		seen[f.Name] = true
 		if f.Type == "" {
 			return fmt.Errorf("%s: flag %q has no type", path, f.Name)
+		}
+	}
+	return nil
+}
+
+// validateExample checks a step can be rendered from d's root flags: each
+// required one needs an example value, and every example must parse as its flag.
+func validateExample(d Descriptor) error {
+	flags, ok := rootFlags(d)
+	if !ok {
+		return nil
+	}
+	for _, f := range flags {
+		if f.Required && f.Example == "" {
+			return fmt.Errorf("%s: flag %q is required, so the published example needs a value for it: set one with an `example:\"...\"` struct tag, or example: on the flag in function.yaml", d.Name, f.Name)
+		}
+		if f.Example == "" {
+			continue
+		}
+		if _, err := exampleValue(f); err != nil {
+			return fmt.Errorf("%s: %w", d.Name, err)
 		}
 	}
 	return nil

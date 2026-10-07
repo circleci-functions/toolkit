@@ -185,6 +185,11 @@ func (r Releaser) dryRun(ctx context.Context) error {
 	}
 
 	fmt.Printf("dry run: built %s %s\n\n", r.name, r.version)
+	if example := publishedExample(functionYAML); example != "" {
+		fmt.Printf("published example:\n\n%s\n", example)
+	} else {
+		fmt.Printf("no published example: running %s needs a command, which a config step can't name\n\n", r.name)
+	}
 	fmt.Printf("would publish to s3://%s/:\n", r.bucket)
 	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, r.version, "function.yaml")))
 	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, "release.txt")))
@@ -235,21 +240,22 @@ func (r Releaser) describe(ctx context.Context, buildDir string) ([]byte, error)
 	data, err := os.ReadFile(checkedIn) //nolint:gosec // path is a fixed, repo-relative filename
 	switch {
 	case err == nil:
-		return marshalDescriptor(data, r.version)
+		return marshalDescriptor(data, r.name, r.version)
 	case os.IsNotExist(err):
 		bin := filepath.Join(buildDir, r.name, runtime.GOOS, runtime.GOARCH, r.name)
 		out, err := exec.CommandContext(ctx, bin, "--describe").Output()
 		if err != nil {
 			return nil, fmt.Errorf("run %s --describe: %w", bin, err)
 		}
-		return marshalDescriptor(out, r.version)
+		return marshalDescriptor(out, r.name, r.version)
 	default:
 		return nil, fmt.Errorf("read %s: %w", checkedIn, err)
 	}
 }
 
-// marshalDescriptor parses, validates, and stamps the release version onto data.
-func marshalDescriptor(data []byte, version string) ([]byte, error) {
+// marshalDescriptor parses, validates, and stamps the release version and its
+// example config onto data.
+func marshalDescriptor(data []byte, name, version string) ([]byte, error) {
 	var d functionyaml.Descriptor
 	if err := yaml.Unmarshal(data, &d); err != nil {
 		return nil, fmt.Errorf("parse function.yaml: %w", err)
@@ -258,6 +264,11 @@ func marshalDescriptor(data []byte, version string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid function.yaml: %w", err)
 	}
 	d.Version = version
+	example, err := functionyaml.RenderExample(d, namespace+name+"@"+version)
+	if err != nil {
+		return nil, fmt.Errorf("render example: %w", err)
+	}
+	d.Example = example
 	out, err := yaml.Marshal(d)
 	if err != nil {
 		return nil, fmt.Errorf("marshal function.yaml: %w", err)
@@ -291,4 +302,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// publishedExample returns the example config in a marshalled function.yaml.
+func publishedExample(functionYAML []byte) string {
+	var d functionyaml.Descriptor
+	if yaml.Unmarshal(functionYAML, &d) != nil {
+		return ""
+	}
+	return d.Example
 }

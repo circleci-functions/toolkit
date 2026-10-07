@@ -38,3 +38,28 @@ tool (
 	github.com/circleci-functions/toolkit/cmd/release
 )
 ```
+
+### Example config
+
+Each release publishes an `example` in `function.yaml`: the config a user writes
+to run the function, with the released version filled in. It passes every
+required flag, plus any flag given an example value — with kong, a struct tag:
+
+```go
+Version string `help:"Go version spec." default:"stable" example:"1.22"`
+```
+
+```yaml
+functions:
+  setup-go: github.com/circleci-functions/setup-go@v0.5.4
+jobs:
+  build:
+    steps:
+      - setup-go:
+          with:
+            version: "1.22"
+```
+
+A function built without kong sets `example:` on the flag in a checked-in
+`function.yaml` instead. `--dry-run` prints the example a release would publish,
+and fails if a required flag has no example value.

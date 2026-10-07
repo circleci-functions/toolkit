@@ -2,6 +2,7 @@ package functionyaml_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -205,6 +206,8 @@ func TestEmbedDescribe(t *testing.T) {
 	assert.Equal(t, d.Name, "widget")
 	_, ok := d.Commands["install"]
 	assert.Assert(t, ok)
+	// The test binary's module stands in for the function's path.
+	assert.Assert(t, strings.Contains(d.Example, "widget: github.com/circleci-functions/toolkit@<version>"), d.Example)
 }
 
 // Mirrors setup-node: no default subcommand, so the hook must fire and exit

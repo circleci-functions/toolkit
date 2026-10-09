@@ -63,3 +63,19 @@ jobs:
 A function built without kong sets `example:` on the flag in a checked-in
 `function.yaml` instead. `--dry-run` prints the example a release would publish,
 and fails if a required flag has no example value.
+
+## `cmd/release-pr`
+
+Releases a function by merging a release PR. The version is the newest
+`## [x.y.z]` heading in the repo's `CHANGELOG.md`. In CI, on every push to main:
+
+- `go tool release-pr update` opens or updates the "Release vX.Y.Z" PR from
+  `release/next`, adding a changelog section for the PRs merged since the last
+  release. A release is a minor bump unless a PR is labelled `release:major` or
+  `release:patch`.
+- `go tool release-pr pending` prints the version to publish once its release PR
+  is merged, and nothing otherwise.
+- `go tool release-pr tag` makes the GitHub release and tag for that version,
+  then `go tool release --version "$VERSION"` publishes it.
+
+It needs a `GITHUB_TOKEN` that can write the repo's contents, PRs and releases.

@@ -12,10 +12,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -38,7 +41,10 @@ var defaultPlatforms = map[string][]string{
 
 // namespace prefixes every published function's S3 key, mirroring the
 // GitHub org each function's repo lives in.
-const namespace = "github.com/circleci-functions/"
+const (
+	namespace      = "github.com/circleci-functions/"
+	defaultBaseURL = "https://functions.circleci.com"
+)
 
 // Releaser compiles a function for each configured platform and publishes it to S3.
 type Releaser struct {
@@ -48,6 +54,9 @@ type Releaser struct {
 
 	platforms map[string][]string
 	client    *s3.Client
+
+	baseURL    string
+	httpClient *http.Client
 }
 
 type Config struct {
@@ -60,6 +69,9 @@ type Config struct {
 
 	// Client is an optional S3 client. Defaults to one built from the ambient AWS config.
 	Client *s3.Client
+
+	// BaseURL is where published functions are served. Defaults to defaultBaseURL.
+	BaseURL string
 }
 
 // validateVersion requires a canonical semver version. Releases are immutable
@@ -92,12 +104,17 @@ func newReleaser(ctx context.Context, cfg Config) (Releaser, error) {
 		}
 		cfg.Client = s3.NewFromConfig(awsCfg)
 	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
+	}
 	return Releaser{
-		name:      cfg.Name,
-		version:   cfg.Version,
-		bucket:    cfg.Bucket,
-		platforms: cfg.Platforms,
-		client:    cfg.Client,
+		name:       cfg.Name,
+		version:    cfg.Version,
+		bucket:     cfg.Bucket,
+		platforms:  cfg.Platforms,
+		client:     cfg.Client,
+		baseURL:    strings.TrimSuffix(cfg.BaseURL, "/"),
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 
@@ -106,6 +123,10 @@ func newReleaser(ctx context.Context, cfg Config) (Releaser, error) {
 func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 	if dryRun {
 		return r.dryRun(ctx)
+	}
+
+	if err := r.checkUnpublished(ctx); err != nil {
+		return err
 	}
 
 	buildDir, err := os.MkdirTemp("", "functions-release")
@@ -159,6 +180,32 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 
 	fmt.Printf("published %s%s %s to %s\n", namespace, r.name, r.version, r.bucket)
 	return nil
+}
+
+// checkUnpublished refuses a version whose checksums.txt is already served, so a
+// release can't replace binaries consumers have pinned. It reads from the CDN since
+// the publisher role can write the bucket but not read it. A missing object is a
+// 403 there, as the bucket grants no list access.
+func (r Releaser) checkUnpublished(ctx context.Context) error {
+	url := r.baseURL + "/" + namespace + r.name + "/" + r.version + "/checksums.txt"
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("check whether %s is published: %w", r.version, err)
+	}
+	_ = resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return fmt.Errorf("%s%s %s is already published, and a published version can't change", namespace, r.name, r.version)
+	case http.StatusForbidden, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("check whether %s is published: %s returned %s", r.version, url, resp.Status)
+	}
 }
 
 // dryRun builds binaries into ./dist and prints the S3 keys that a real release

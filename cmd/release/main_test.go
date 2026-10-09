@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -55,4 +58,36 @@ jobs:
           with:
             version: "1.20"
 `)
+}
+
+func TestCheckUnpublished(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		err    string
+	}{
+		{name: "missing is a 403 from the CDN", status: http.StatusForbidden},
+		{name: "missing", status: http.StatusNotFound},
+		{name: "published", status: http.StatusOK, err: "github.com/circleci-functions/widget v0.2.0 is already published"},
+		{name: "unexpected status", status: http.StatusBadGateway, err: "502 Bad Gateway"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var path string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.Method + " " + r.URL.Path
+				w.WriteHeader(tt.status)
+			}))
+			t.Cleanup(srv.Close)
+
+			r := Releaser{name: "widget", version: "v0.2.0", baseURL: srv.URL, httpClient: srv.Client()}
+			err := r.checkUnpublished(context.Background())
+
+			assert.Equal(t, path, "HEAD /github.com/circleci-functions/widget/v0.2.0/checksums.txt")
+			if tt.err == "" {
+				assert.NilError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.err)
+		})
+	}
 }

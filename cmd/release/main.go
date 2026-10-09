@@ -67,7 +67,7 @@ type Config struct {
 // missing leading v, and a partial version such as v1 or v1.2.
 func validateVersion(version string) error {
 	if !semver.IsValid(version) || semver.Canonical(version) != version {
-		return fmt.Errorf("version %q must be canonical semver, for example v0.1.0-abc1234", version)
+		return fmt.Errorf("version %q must be canonical semver, for example v0.1.0", version)
 	}
 	return nil
 }
@@ -278,7 +278,7 @@ func marshalDescriptor(data []byte, name, version string) ([]byte, error) {
 
 type cli struct {
 	Name    string `required:"" help:"function name (e.g. setup-go)"`
-	Version string `required:"" help:"version (e.g. v0.1.0-abc1234)"`
+	Version string `required:"" help:"version (e.g. v0.1.0)"`
 	Bucket  string `help:"S3 bucket to publish to (default: circleci-functions)"`
 	DryRun  bool   `help:"build and write artifacts to ./dist without uploading to S3"`
 }

@@ -268,3 +268,16 @@ func TestRunTag(t *testing.T) {
 		assert.Check(t, cmp.ErrorContains(err, "v1.3.1 is already tagged on earlier, not head"))
 	})
 }
+
+func TestGitHubErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"message":"Repository rule violations found"}`)
+	}))
+	t.Cleanup(srv.Close)
+	gh := newGitHub(context.Background(), srv.URL, "o/r", "gh")
+
+	err := gh.createRelease(context.Background(), "v1.0.0", "head", "notes")
+	assert.Check(t, cmp.ErrorContains(err, `422 (Unprocessable Entity)`))
+	assert.Check(t, cmp.ErrorContains(err, `"message":"Repository rule violations found"`))
+}

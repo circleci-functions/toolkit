@@ -34,8 +34,15 @@ func newGitHub(ctx context.Context, api, repo, token string) *gitHub {
 
 // call sends a request to a path under the repo, such as "/pulls". Paths are concatenated
 // rather than passed as route params, which would escape the slash in release/next.
+// A failure carries GitHub's message, which says why a request was refused.
 func (g *gitHub) call(ctx context.Context, method, path string, opts ...func(*httpcl.Request)) error {
-	return g.http.Call(ctx, httpcl.NewRequest(method, "/repos/"+g.repo+path, opts...))
+	var body string
+	opts = append([]func(*httpcl.Request){httpcl.AnyStatusDecoder(httpcl.NewStringDecoder(&body))}, opts...)
+	err := g.http.Call(ctx, httpcl.NewRequest(method, "/repos/"+g.repo+path, opts...))
+	if err != nil && strings.TrimSpace(body) != "" {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(body))
+	}
+	return err
 }
 
 func (g *gitHub) owner() string { return strings.Split(g.repo, "/")[0] }

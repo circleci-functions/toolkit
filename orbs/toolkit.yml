@@ -48,3 +48,71 @@ commands:
             echo "export AWS_ROLE_ARN=${AWS_ROLE_ARN@Q}" >>"${BASH_ENV}"
             echo "export AWS_ROLE_SESSION_NAME=\"circleci-workflow-${CIRCLECI_WORKFLOW_ID}\"" >>"${BASH_ENV}"
             echo "export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION@Q}" >>"${BASH_ENV}"
+
+jobs:
+  release-pr:
+    description: >
+      Open, update or close the "Release vX.Y.Z" PR for a function repo. Run it on
+      main, after the tests, with a context that provides a GITHUB_TOKEN that can
+      write PRs and read private modules. The repo needs release-pr as a go tool.
+    parameters:
+      executor:
+        type: executor
+        description: "The executor to run on, with Go."
+      cache-prefix:
+        type: string
+        description: "Prefix of the repo's Go cache keys, such as setup-go-go."
+    executor: << parameters.executor >>
+    steps:
+      - checkout
+      - private-mod-init
+      - restore_cache:
+          keys:
+            - << parameters.cache-prefix >>-{{ checksum "go.sum" }}-
+            - << parameters.cache-prefix >>-
+      - run:
+          name: Open, update or close the release PR
+          command: go tool release-pr update
+
+  publish:
+    description: >
+      Make the GitHub release and tag, then `task publish`, when this push merged a
+      release PR. It halts on every other push. Run it on main, after the tests, with
+      a context that provides a GITHUB_TOKEN that can write releases and read private
+      modules, and the functions publisher context.
+    parameters:
+      executor:
+        type: executor
+        description: "The executor to run on, with Go and Task."
+      cache-prefix:
+        type: string
+        description: "Prefix of the repo's Go cache keys, such as setup-go-go."
+      role_arn:
+        type: string
+        description: "The ARN of the role that publishes, passed to setup-aws-oidc."
+        default: $FUNCTIONS_PUBLISHER_ROLE_ARN
+    executor: << parameters.executor >>
+    steps:
+      - checkout
+      - private-mod-init
+      - restore_cache:
+          keys:
+            - << parameters.cache-prefix >>-{{ checksum "go.sum" }}-
+            - << parameters.cache-prefix >>-
+      - run:
+          name: Halt unless the release is unpublished
+          command: |
+            VERSION="$(go tool release-pr pending)"
+            if [ -z "$VERSION" ]; then
+              circleci-agent step halt
+              exit 0
+            fi
+            echo "export VERSION=$VERSION" >> "$BASH_ENV"
+      - setup-aws-oidc:
+          role_arn: << parameters.role_arn >>
+      - run:
+          name: Make the GitHub release and tag
+          command: go tool release-pr tag
+      - run:
+          name: Build and publish
+          command: task publish VERSION="$VERSION"

@@ -88,11 +88,18 @@ func linkFile(src, dst string, elevate bool) error {
 
 // sudoSymlink replaces a root-owned entry on PATH. -n so a job without
 // passwordless sudo fails rather than blocking on a prompt.
+//
+// sudo explains itself on stderr, but prints nothing when it can't be run at
+// all, as on an image without it.
 func sudoSymlink(src, dst string) error {
-	if out, err := exec.Command("sudo", "-n", "ln", "-sf", src, dst).CombinedOutput(); err != nil {
-		return fmt.Errorf("sudo ln: %s", firstLine(out))
+	out, err := exec.Command("sudo", "-n", "ln", "-sf", src, dst).CombinedOutput()
+	if err == nil {
+		return nil
 	}
-	return nil
+	if msg := firstLine(out); msg != "" {
+		return fmt.Errorf("sudo ln: %s", msg)
+	}
+	return fmt.Errorf("sudo ln: %w", err)
 }
 
 // writeShims writes two, because a job's steps do not all run in the same

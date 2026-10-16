@@ -362,3 +362,17 @@ func TestEnsure_LinksAliasesEvenWhenTheBinaryAlreadyResolves(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, target, filepath.Join(from, tool))
 }
+
+// Slim and Alpine images often have no sudo, and sudo is then not there to
+// say what went wrong.
+func TestEnsure_SaysWhySudoFailedWhenItIsNotInstalled(t *testing.T) {
+	from := fakeTool(t)
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0755))
+	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
+	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "sudo ln: exec: \"sudo\": executable file not found")
+}

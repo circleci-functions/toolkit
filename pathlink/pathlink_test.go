@@ -300,11 +300,33 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, pathlink.Writable(dir))
 	assert.Assert(t, pathlink.Writable(filepath.Join(dir, "not-yet")),
 		"a PATH entry that can be created counts as writable")
+	assert.Assert(t, pathlink.Writable(filepath.Join(dir, ".local", "bin")),
+		"so does one whose parent is missing too, since linking creates both")
 
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
 	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
 	assert.Assert(t, !pathlink.Writable(dir))
 	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child")))
+	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child", "grandchild")))
+}
+
+func TestWritable_UnderAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	assert.NilError(t, os.WriteFile(file, nil, 0600))
+
+	assert.Assert(t, !pathlink.Writable(filepath.Join(file, "bin")))
+}
+
+// The case that sent a link through sudo: ~/.local/bin on PATH, and no
+// ~/.local yet.
+func TestEnsure_CreatesMissingParentsOfAPreferredDir(t *testing.T) {
+	from := fakeTool(t)
+	bin := filepath.Join(t.TempDir(), ".local", "bin")
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{Preferred: []string{bin}, Path: bin}))
+	assert.NilError(t, err)
+	assert.Equal(t, got.Dir, bin)
+	assert.Assert(t, got.Verified)
 }
 
 // Aliases replace a shell alias, which only bash would have seen. setup-python

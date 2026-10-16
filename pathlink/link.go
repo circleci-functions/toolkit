@@ -87,12 +87,14 @@ func linkFile(src, dst string, elevate bool) error {
 }
 
 // sudoSymlink replaces a root-owned entry on PATH. -n so a job without
-// passwordless sudo fails rather than blocking on a prompt.
+// passwordless sudo fails rather than blocking on a prompt. ln -n so a dst
+// that is a symlink to a directory is replaced, rather than followed and the
+// link made inside that directory.
 //
 // sudo explains itself on stderr, but prints nothing when it can't be run at
 // all, as on an image without it.
 func sudoSymlink(src, dst string) error {
-	out, err := exec.Command("sudo", "-n", "ln", "-sf", src, dst).CombinedOutput()
+	out, err := exec.Command("sudo", "-n", "ln", "-sfn", src, dst).CombinedOutput()
 	if err == nil {
 		return nil
 	}

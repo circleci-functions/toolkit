@@ -22,39 +22,57 @@ func Command(bin string, args ...string) *exec.Cmd {
 }
 
 // linkInto points dir/name at fromDir/name for each name, plus dir/alias at
-// fromDir/target for each alias, with sudo when elevate is set.
+// fromDir/target for each alias, with sudo when elevate is set. It puts back
+// what it changed if any link fails, and otherwise returns the changes for the
+// caller to commit or undo.
 //
 // A symlink rather than a copy: a tool that locates its own installation from
 // its executable path resolves symlinks on the way, where a copy would look
 // beside itself.
-func linkInto(dir, fromDir string, names []string, aliases map[string]string, elevate bool) error {
+func linkInto(dir, fromDir string, names []string, aliases map[string]string, elevate bool) (*changes, error) {
 	if !elevate {
 		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // a directory on PATH is readable by design
-			return fmt.Errorf("create %s: %w", dir, err)
+			return nil, fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
+	c := &changes{fs: files{elevate: elevate}}
 	link := func(from, as string) error {
 		src := filepath.Join(fromDir, exeName(from))
 		dst := filepath.Join(dir, exeName(as))
-		if err := linkFile(src, dst, elevate); err != nil {
-			return fmt.Errorf("link %s: %w", dst, err)
+		if err := c.link(src, dst); err != nil {
+			return errors.Join(fmt.Errorf("link %s: %w", dst, err), c.undo())
 		}
 		return nil
 	}
 	for _, name := range names {
 		if err := link(name, name); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for alias, target := range aliases {
 		if err := link(target, alias); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return c, nil
 }
 
-func linkFile(src, dst string, elevate bool) error {
+// changes are the links linkInto made, each with what it moved aside, held
+// until PATH is known to resolve them.
+type changes struct {
+	fs    files
+	links []change
+}
+
+type change struct {
+	dst     string
+	restore backup
+}
+
+// empty reports that every link was already in place.
+func (c *changes) empty() bool { return len(c.links) == 0 }
+
+func (c *changes) link(src, dst string) error {
 	// PATH already points at the binary itself, so a symlink onto its own
 	// target would leave the job with nothing that works.
 	if src == dst {
@@ -63,18 +81,41 @@ func linkFile(src, dst string, elevate bool) error {
 	if target, err := os.Readlink(dst); err == nil && target == src {
 		return nil
 	}
-	fs := files{elevate: elevate}
 
 	// Moved aside rather than deleted: taking over a preinstalled tool means
 	// dst is its own binary, and a failure below must leave it working.
-	restore, err := moveAside(fs, dst)
+	restore, err := moveAside(c.fs, dst)
 	if err != nil {
 		return err
 	}
-	if err := fs.symlink(src, dst); err != nil {
+	if err := c.fs.symlink(src, dst); err != nil {
 		return errors.Join(err, restore.undo())
 	}
-	return restore.commit()
+	c.links = append(c.links, change{dst: dst, restore: restore})
+	return nil
+}
+
+// commit keeps the links, and reports the originals kept beside them.
+func (c *changes) commit() {
+	for _, l := range c.links {
+		l.restore.commit()
+	}
+	c.links = nil
+}
+
+// undo removes the links, newest first, and puts back what each replaced.
+func (c *changes) undo() error {
+	var errs []error
+	for i := len(c.links) - 1; i >= 0; i-- {
+		l := c.links[i]
+		if err := c.fs.unlink(l.dst); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", l.dst, err))
+			continue
+		}
+		errs = append(errs, l.restore.undo())
+	}
+	c.links = nil
+	return errors.Join(errs...)
 }
 
 // files changes the entries of one directory, through sudo when that
@@ -93,6 +134,15 @@ func (f files) remove(path string) error {
 		return sudo("rm", "-f", path)
 	}
 	return os.Remove(path)
+}
+
+// unlink removes what symlink made at dst.
+func (f files) unlink(dst string) error {
+	if runtime.GOOS == "windows" && !f.elevate {
+		base := dst[:len(dst)-len(filepath.Ext(dst))]
+		return errors.Join(os.Remove(base+".bat"), os.Remove(base))
+	}
+	return f.remove(dst)
 }
 
 // symlink links dst to src. Under sudo, ln -n so a dst that is a symlink to a
@@ -172,7 +222,7 @@ func moveAside(fs files, path string) (backup, error) {
 }
 
 // commit leaves the link in place, and reports an original it kept.
-func (b backup) commit() error {
+func (b backup) commit() {
 	switch {
 	case b.from == "":
 	case b.keep:
@@ -180,7 +230,6 @@ func (b backup) commit() error {
 	default:
 		_ = b.fs.remove(b.from)
 	}
-	return nil
 }
 
 // undo puts the original back, rather than leaving the job with nothing.

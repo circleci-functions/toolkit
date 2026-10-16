@@ -60,6 +60,13 @@ jobs:
 `)
 }
 
+// A step selects a command with its key, as `- widget/install:`, so the
+// message must not say a step can't name one.
+func TestNoExampleNamesTheStepForm(t *testing.T) {
+	assert.Equal(t, noExample("widget"),
+		"no published example: widget only groups its commands, so a step names one as widget/<command>\n\n")
+}
+
 func TestCheckUnpublished(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

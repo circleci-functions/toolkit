@@ -235,7 +235,7 @@ func (r Releaser) dryRun(ctx context.Context) error {
 	if example := publishedExample(functionYAML); example != "" {
 		fmt.Printf("published example:\n\n%s\n", example)
 	} else {
-		fmt.Printf("no published example: running %s needs a command, which a config step can't name\n\n", r.name)
+		fmt.Print(noExample(r.name))
 	}
 	fmt.Printf("would publish to s3://%s/:\n", r.bucket)
 	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, r.version, "function.yaml")))
@@ -349,6 +349,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// noExample says why a dry run has no example to show: the function only
+// groups its commands, so a step has to name one.
+func noExample(name string) string {
+	return fmt.Sprintf("no published example: %s only groups its commands, so a step names one as %s/<command>\n\n", name, name)
 }
 
 // publishedExample returns the example config in a marshalled function.yaml.

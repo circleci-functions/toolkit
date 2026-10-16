@@ -41,6 +41,12 @@ type Options struct {
 	// Ensure only checks that PATH resolves Names[0] to the directory it linked
 	// into, which catches shadowing but not a lookalike.
 	Verify func(bin string) error
+	// AddToPath, when set, puts a directory on PATH for later steps, as
+	// bashenv.AddToPath does. Ensure uses it instead of sudo when the only way
+	// onto PATH would need root: it links into the first writable Preferred
+	// directory and has AddToPath put that ahead. A PATH prepend reaches only
+	// steps that source $BASH_ENV, which is why it is not the first choice.
+	AddToPath func(dir string) error
 }
 
 // Result describes what Ensure did.
@@ -50,12 +56,20 @@ type Result struct {
 	// Verified reports that PATH was confirmed to resolve Names[0]. False when
 	// Dir skipped discovery, since that directory need not be on PATH.
 	Verified bool
+	// AddedToPath reports that Dir was put on PATH through Options.AddToPath,
+	// so it resolves only in steps that source $BASH_ENV.
+	AddedToPath bool
 }
 
 // Ensure makes opts.Names resolvable by name, and reports where it linked them.
 //
 // Unless opts.Dir skips discovery, it fails if PATH does not then resolve
 // Names[0] to what was linked, rather than letting the job run something else.
+//
+// Where getting onto PATH would need root, it links elsewhere and calls
+// opts.AddToPath if that is set. Otherwise it uses sudo -n, except in the macOS
+// system directories that root can't change either, and a failure names what
+// the job could change instead.
 //
 // A binary it replaces is kept beside the link as <name>.pathlink-old, and
 // reported on stderr.
@@ -84,7 +98,18 @@ func Ensure(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
 			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
 	}
+	if elevate {
+		if alt := firstWritable(opts.Preferred); alt != "" && opts.AddToPath != nil {
+			return ensurePrepended(opts, dirs, alt)
+		}
+		if err := rootCanChange(runtime.GOOS, dir); err != nil {
+			return Result{}, needsRoot(opts, dir, err)
+		}
+	}
 	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, elevate); err != nil {
+		if elevate {
+			return Result{}, needsRoot(opts, dir, err)
+		}
 		return Result{}, err
 	}
 
@@ -92,6 +117,63 @@ func Ensure(opts Options) (Result, error) {
 		return Result{Dir: dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], dir, err)
 	}
 	return Result{Dir: dir, Verified: true}, nil
+}
+
+// ensurePrepended links into dir, which is not on PATH ahead of the binary it
+// has to beat, and has opts.AddToPath put it there once the link checks out.
+func ensurePrepended(opts Options, dirs []string, dir string) (Result, error) {
+	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, false); err != nil {
+		return Result{}, err
+	}
+	if _, err := verify(append([]string{dir}, dirs...), opts, dir); err != nil {
+		return Result{Dir: dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], dir, err)
+	}
+	if err := opts.AddToPath(dir); err != nil {
+		return Result{Dir: dir}, fmt.Errorf("pathlink: put %s on PATH: %w", dir, err)
+	}
+	return Result{Dir: dir, Verified: true, AddedToPath: true}, nil
+}
+
+func firstWritable(dirs []string) string {
+	for _, d := range dirs {
+		if Writable(d) {
+			return d
+		}
+	}
+	return ""
+}
+
+// errProtected is why sudo is not even tried on a macOS system directory.
+var errProtected = errors.New("macOS System Integrity Protection keeps even root from changing it")
+
+// rootCanChange reports errProtected for a directory that sudo can't change
+// either, so trying would only fail with a misleading message.
+func rootCanChange(goos, dir string) error {
+	if goos != "darwin" {
+		return nil
+	}
+	switch filepath.Clean(dir) {
+	case "/bin", "/sbin", "/usr/bin", "/usr/sbin":
+		return errProtected
+	}
+	return nil
+}
+
+// needsRoot explains a link that needed root and didn't get it, with what the
+// job can change so that it doesn't need it.
+func needsRoot(opts Options, dir string, cause error) error {
+	instead := firstWritable(opts.Preferred)
+	if instead == "" && len(opts.Preferred) > 0 {
+		instead = opts.Preferred[0]
+	}
+	if instead == "" {
+		instead = "a writable directory"
+	}
+	fix := fmt.Sprintf("put %s on PATH ahead of %s", instead, dir)
+	if !errors.Is(cause, errProtected) {
+		fix += ", or allow passwordless sudo"
+	}
+	return fmt.Errorf("pathlink: linking %s into %s needs root: %w; %s", opts.Names[0], dir, cause, fix)
 }
 
 // verify reports the directory PATH resolves Names[0] from, once satisfied it

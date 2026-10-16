@@ -418,6 +418,18 @@ func fakeSudo(t *testing.T) (log string) {
 	return log
 }
 
+// refusingSudo puts a sudo on PATH that records its arguments and refuses, as
+// sudo -n does without passwordless sudo.
+func refusingSudo(t *testing.T) (log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\necho 'sudo: a password is required' >&2\nexit 1\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0755))
+	t.Setenv("PATH", dir)
+	return log
+}
+
 // readOnlyTool returns a directory holding a tool that cannot be linked over
 // without elevation.
 func readOnlyTool(t *testing.T) string {
@@ -454,4 +466,69 @@ func TestEnsure_SaysWhySudoFailedWhenItIsNotInstalled(t *testing.T) {
 
 	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
 	assert.ErrorContains(t, err, "sudo mv: exec: \"sudo\": executable file not found")
+}
+
+// A link that would need root goes into a writable preferred directory
+// instead, when the caller can put that on PATH.
+func TestEnsure_PrefersAPathPrependToSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+	var added []string
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(d string) error { added = append(added, d); return nil },
+	}))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Result{Dir: pref, Verified: true, AddedToPath: true})
+	assert.DeepEqual(t, added, []string{pref})
+
+	target, err := os.Readlink(filepath.Join(pref, tool))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(from, tool))
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+// Without a way to change PATH, sudo is still the fallback, and its failure
+// says what would avoid it.
+func TestEnsure_SaysHowToAvoidSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	refusingSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Preferred: []string{pref}, Path: dir}))
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linking %s into %s needs root: ", tool, dir))
+	assert.ErrorContains(t, err, "sudo: a password is required")
+	assert.ErrorContains(t, err, fmt.Sprintf("; put %s on PATH ahead of %s, or allow passwordless sudo", pref, dir))
+}
+
+// macOS's System Integrity Protection keeps even root out of /usr/bin, so
+// sudo can't help there.
+func TestEnsure_DoesNotTrySudoOnAMacOSSystemDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	from := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(from, "true"), []byte("#!/bin/sh\necho "+from+"\n"), 0755))
+	log := fakeSudo(t)
+
+	_, err := pathlink.Ensure(pathlink.Options{
+		Names:     []string{"true"},
+		FromDir:   from,
+		Preferred: []string{"/nonexistent/bin"},
+		Path:      "/usr/bin",
+		Verify:    verifyFrom(from),
+	})
+	assert.ErrorContains(t, err, "pathlink: linking true into /usr/bin needs root: macOS System Integrity Protection")
+	assert.ErrorContains(t, err, "; put /nonexistent/bin on PATH ahead of /usr/bin")
+	assert.Assert(t, !strings.Contains(err.Error(), "sudo"), err.Error())
+
+	_, statErr := os.Stat(log)
+	assert.Assert(t, os.IsNotExist(statErr), "sudo must not be tried")
 }

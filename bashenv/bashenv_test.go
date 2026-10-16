@@ -105,7 +105,7 @@ func TestExportEnvVars_NoBashEnv(t *testing.T) {
 	t.Setenv("BASH_ENV", "")
 
 	err := bashenv.ExportEnvVars(map[string]string{"FOO": "bar"})
-	assert.ErrorContains(t, err, "BASH_ENV must be set")
+	assert.ErrorIs(t, err, bashenv.ErrNoBashEnv)
 }
 
 func TestExportEnvVars_BadPath(t *testing.T) {
@@ -145,7 +145,7 @@ func TestAddToPath_NoBashEnv(t *testing.T) {
 	t.Setenv("BASH_ENV", "")
 
 	err := bashenv.AddToPath("/usr/local/go/bin")
-	assert.ErrorContains(t, err, "BASH_ENV must be set")
+	assert.ErrorIs(t, err, bashenv.ErrNoBashEnv)
 }
 
 func TestAddAlias_ToBashEnv(t *testing.T) {
@@ -191,5 +191,66 @@ func TestAddAlias_NoBashEnv(t *testing.T) {
 	t.Setenv("BASH_ENV", "")
 
 	err := bashenv.AddAlias(map[string]string{"ll": "ls -la"})
-	assert.ErrorContains(t, err, "BASH_ENV must be set")
+	assert.ErrorIs(t, err, bashenv.ErrNoBashEnv)
+}
+
+// A function run twice in a job, or a rerun of the step, would otherwise
+// leave a copy of every line per run.
+func TestWritesAreIdempotent(t *testing.T) {
+	bashEnvPath := filepath.Join(t.TempDir(), "env.sh")
+	t.Setenv("BASH_ENV", bashEnvPath)
+
+	for range 3 {
+		assert.NilError(t, bashenv.ExportEnvVars(map[string]string{"FOO": "bar"}))
+		assert.NilError(t, bashenv.AddToPath("/opt/tool/bin"))
+		assert.NilError(t, bashenv.AddAlias(map[string]string{"ll": "ls -la"}))
+	}
+
+	got, err := os.ReadFile(bashEnvPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "export FOO='bar'\n"+
+		"export PATH=/opt/tool/bin:$PATH\n"+
+		"shopt -s expand_aliases\n"+
+		"alias ll='ls -la'\n")
+}
+
+// Only the last setting of a name is in effect, so a line matching an earlier
+// one still changes something.
+func TestWritesRepeatWhatALaterLineOverrode(t *testing.T) {
+	bashEnvPath := filepath.Join(t.TempDir(), "env.sh")
+	t.Setenv("BASH_ENV", bashEnvPath)
+
+	assert.NilError(t, bashenv.ExportEnvVars(map[string]string{"FOO": "first"}))
+	assert.NilError(t, bashenv.ExportEnvVars(map[string]string{"FOO": "second"}))
+	assert.NilError(t, bashenv.ExportEnvVars(map[string]string{"FOO": "first"}))
+	assert.NilError(t, bashenv.AddToPath("/a/bin"))
+	assert.NilError(t, bashenv.AddToPath("/b/bin"))
+	assert.NilError(t, bashenv.AddToPath("/a/bin"))
+
+	got, err := os.ReadFile(bashEnvPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "export FOO='first'\n"+
+		"export FOO='second'\n"+
+		"export FOO='first'\n"+
+		"export PATH=/a/bin:$PATH\n"+
+		"export PATH=/b/bin:$PATH\n"+
+		"export PATH=/a/bin:$PATH\n")
+
+	path, err := bashenv.Vars(bashEnvPath, map[string]string{"PATH": "/usr/bin"})
+	assert.NilError(t, err)
+	assert.Equal(t, path["PATH"], "/a/bin:/b/bin:/a/bin:/usr/bin")
+}
+
+// Something else may have written $BASH_ENV without a final newline, which
+// would otherwise run its last line into the first one written here.
+func TestWritesStartOnANewLine(t *testing.T) {
+	bashEnvPath := filepath.Join(t.TempDir(), "env.sh")
+	assert.NilError(t, os.WriteFile(bashEnvPath, []byte("export OTHER=x"), 0o600))
+	t.Setenv("BASH_ENV", bashEnvPath)
+
+	assert.NilError(t, bashenv.ExportEnvVars(map[string]string{"FOO": "bar"}))
+
+	got, err := os.ReadFile(bashEnvPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "export OTHER=x\nexport FOO='bar'\n")
 }

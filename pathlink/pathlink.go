@@ -56,6 +56,9 @@ type Result struct {
 //
 // Unless opts.Dir skips discovery, it fails if PATH does not then resolve
 // Names[0] to what was linked, rather than letting the job run something else.
+//
+// A binary it replaces is kept beside the link as <name>.pathlink-old, and
+// reported on stderr.
 func Ensure(opts Options) (Result, error) {
 	if len(opts.Names) == 0 || opts.FromDir == "" {
 		return Result{}, errors.New("pathlink: Names and FromDir are required")

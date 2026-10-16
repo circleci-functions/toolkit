@@ -363,14 +363,48 @@ func TestEnsure_LinksAliasesEvenWhenTheBinaryAlreadyResolves(t *testing.T) {
 	assert.Equal(t, target, filepath.Join(from, tool))
 }
 
-// Slim and Alpine images often have no sudo, and sudo is then not there to
-// say what went wrong.
-func TestEnsure_SaysWhySudoFailedWhenItIsNotInstalled(t *testing.T) {
-	from := fakeTool(t)
+// fakeSudo puts a sudo on PATH that records its arguments, one call per line,
+// and succeeds without running anything.
+func fakeSudo(t *testing.T) (log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0755))
+	t.Setenv("PATH", dir)
+	return log
+}
+
+// readOnlyTool returns a directory holding a tool that cannot be linked over
+// without elevation.
+func readOnlyTool(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0755))
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
 	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
+	return dir
+}
+
+// ln -sf follows a destination that is a symlink to a directory, and would
+// make the link inside it.
+func TestEnsure_SudoReplacesTheEntryRatherThanFollowingIt(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+
+	_, _ = pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+
+	calls, err := os.ReadFile(log) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(calls), fmt.Sprintf("-n ln -sfn %s %s\n", filepath.Join(from, tool), filepath.Join(dir, tool)))
+}
+
+// Slim and Alpine images often have no sudo, and sudo is then not there to
+// say what went wrong.
+func TestEnsure_SaysWhySudoFailedWhenItIsNotInstalled(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
 	t.Setenv("PATH", t.TempDir())
 
 	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))

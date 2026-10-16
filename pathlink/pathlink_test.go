@@ -462,6 +462,9 @@ func refusingSudo(t *testing.T) (log string) {
 // without elevation.
 func readOnlyTool(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only mode does not stop writes to a directory on Windows")
+	}
 	dir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0755))
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable

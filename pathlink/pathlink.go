@@ -64,7 +64,8 @@ type Result struct {
 // Ensure makes opts.Names resolvable by name, and reports where it linked them.
 //
 // Unless opts.Dir skips discovery, it fails if PATH does not then resolve
-// Names[0] to what was linked, rather than letting the job run something else.
+// Names[0] to what was linked, rather than letting the job run something else,
+// and removes the links it made, putting back what they replaced.
 //
 // Where getting onto PATH would need root, it links elsewhere and calls
 // opts.AddToPath if that is set. Otherwise it uses sudo -n, except in the macOS
@@ -80,9 +81,11 @@ func Ensure(opts Options) (Result, error) {
 	dirs := SearchDirs(opts.Path)
 
 	if opts.Dir != "" {
-		if err := linkInto(opts.Dir, opts.FromDir, opts.Names, opts.Aliases, false); err != nil {
+		c, err := linkInto(opts.Dir, opts.FromDir, opts.Names, opts.Aliases, false)
+		if err != nil {
 			return Result{}, err
 		}
+		c.commit()
 		return Result{Dir: opts.Dir}, nil
 	}
 
@@ -100,7 +103,8 @@ func Ensure(opts Options) (Result, error) {
 	if p.AddsToPath {
 		return ensurePrepended(opts, dirs, p.Dir)
 	}
-	if err := linkInto(p.Dir, opts.FromDir, opts.Names, opts.Aliases, p.Elevate); err != nil {
+	c, err := linkInto(p.Dir, opts.FromDir, opts.Names, opts.Aliases, p.Elevate)
+	if err != nil {
 		if p.Elevate {
 			return Result{}, needsRoot(opts, p.Dir, err)
 		}
@@ -108,9 +112,21 @@ func Ensure(opts Options) (Result, error) {
 	}
 
 	if _, err := verify(dirs, opts, p.Dir); err != nil {
-		return Result{Dir: p.Dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], p.Dir, err)
+		return Result{Dir: p.Dir}, unverified(opts, p.Dir, c, err)
 	}
+	c.commit()
 	return Result{Dir: p.Dir, Verified: true}, nil
+}
+
+// unverified undoes links PATH doesn't resolve as it should, rather than
+// leaving them to shadow whatever later steps would otherwise run, and
+// explains why. It says what was linked only if something was.
+func unverified(opts Options, dir string, c *changes, cause error) error {
+	if c.empty() {
+		return fmt.Errorf("pathlink: %w", cause)
+	}
+	err := fmt.Errorf("pathlink: linked %s into %s, but %w, so removed the links again", opts.Names[0], dir, cause)
+	return errors.Join(err, c.undo())
 }
 
 // Plan is where Ensure would link, worked out before there is anything to
@@ -172,15 +188,17 @@ func plan(opts Options, dirs []string) (Plan, error) {
 // ensurePrepended links into dir, which is not on PATH ahead of the binary it
 // has to beat, and has opts.AddToPath put it there once the link checks out.
 func ensurePrepended(opts Options, dirs []string, dir string) (Result, error) {
-	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, false); err != nil {
+	c, err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, false)
+	if err != nil {
 		return Result{}, err
 	}
 	if _, err := verify(append([]string{dir}, dirs...), opts, dir); err != nil {
-		return Result{Dir: dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], dir, err)
+		return Result{Dir: dir}, unverified(opts, dir, c, err)
 	}
 	if err := opts.AddToPath(dir); err != nil {
-		return Result{Dir: dir}, fmt.Errorf("pathlink: put %s on PATH: %w", dir, err)
+		return Result{Dir: dir}, errors.Join(fmt.Errorf("pathlink: put %s on PATH: %w", dir, err), c.undo())
 	}
+	c.commit()
 	return Result{Dir: dir, Verified: true, AddedToPath: true}, nil
 }
 

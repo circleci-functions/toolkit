@@ -451,19 +451,22 @@ func readOnlyTool(t *testing.T) string {
 }
 
 // Under sudo the original is kept too, and ln -n replaces a destination that
-// is a symlink to a directory rather than making the link inside it.
+// is a symlink to a directory rather than making the link inside it. The fake
+// sudo changes nothing, so PATH still resolves the original, and the link is
+// undone through sudo as well.
 func TestEnsure_SudoKeepsTheOriginalAndReplacesTheEntry(t *testing.T) {
 	from := fakeTool(t)
 	dir := readOnlyTool(t)
 	log := fakeSudo(t)
 	dst := filepath.Join(dir, tool)
 
-	_, _ = pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "so removed the links again")
 
 	calls, err := os.ReadFile(log) //nolint:gosec // a path this test chose
 	assert.NilError(t, err)
-	assert.Equal(t, string(calls), fmt.Sprintf("-n mv %s %s.pathlink-old\n-n ln -sfn %s %s\n",
-		dst, dst, filepath.Join(from, tool), dst))
+	assert.Equal(t, string(calls), fmt.Sprintf("-n mv %s %s.pathlink-old\n-n ln -sfn %s %s\n-n rm -f %s\n-n mv %s.pathlink-old %s\n",
+		dst, dst, filepath.Join(from, tool), dst, dst, dst, dst))
 }
 
 // Slim and Alpine images often have no sudo, and sudo is then not there to
@@ -616,4 +619,73 @@ func TestCheck_ReportsAPathPrepend(t *testing.T) {
 func TestCheck_RequiresNames(t *testing.T) {
 	_, err := pathlink.Check(pathlink.Options{})
 	assert.ErrorContains(t, err, "Names is required")
+}
+
+// A link PATH doesn't resolve as it should would still shadow what a later
+// step runs, so it is taken back out.
+func TestEnsure_RemovesLinksThatFailVerification(t *testing.T) {
+	from := fakeTool(t)
+	early := t.TempDir()
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{early},
+		Path:      early,
+		Verify:    verifyFrom("/somewhere/else"),
+	}))
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linked %s into %s, but PATH resolves", tool, early))
+	assert.ErrorContains(t, err, "so removed the links again")
+
+	_, err = os.Lstat(filepath.Join(early, tool))
+	assert.Assert(t, os.IsNotExist(err), "the link must be gone")
+}
+
+func TestEnsure_RestoresWhatItTookOverWhenVerificationFails(t *testing.T) {
+	from := fakeTool(t)
+	dir := t.TempDir()
+	original := filepath.Join(dir, tool)
+	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
+
+	stderr := captureStderr(t, func() {
+		_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir, Verify: verifyFrom("/somewhere/else")}))
+		assert.ErrorContains(t, err, "so removed the links again")
+	})
+	assert.Equal(t, stderr, "", "nothing was replaced in the end")
+
+	got, err := os.ReadFile(original) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "#!/bin/sh\necho original\n")
+
+	entries, err := os.ReadDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 1, "no backup may be left once the original is back")
+}
+
+// setup-go --detect-only on Homebrew: PATH already reaches FromDir, so there
+// is nothing to link, and the error must not say there was.
+func TestEnsure_DoesNotClaimALinkItDidNotMake(t *testing.T) {
+	from := fakeTool(t)
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: from, Verify: verifyFrom("/somewhere/else")}))
+	assert.ErrorContains(t, err, "pathlink: PATH resolves mytool to ")
+	assert.Assert(t, !strings.Contains(err.Error(), "linked"), err.Error())
+}
+
+func TestEnsure_DoesNotChangePathForALinkThatFailsVerification(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	fakeSudo(t)
+	pref := t.TempDir()
+	called := false
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{pref},
+		Path:      dir,
+		Verify:    verifyFrom("/somewhere/else"),
+		AddToPath: func(string) error { called = true; return nil },
+	}))
+	assert.ErrorContains(t, err, "so removed the links again")
+	assert.Assert(t, !called, "PATH must not be changed for a link that was removed")
+
+	_, err = os.Lstat(filepath.Join(pref, tool))
+	assert.Assert(t, os.IsNotExist(err), "the link must be gone")
 }

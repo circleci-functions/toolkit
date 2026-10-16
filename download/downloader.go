@@ -12,9 +12,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
-	"github.com/circleci-functions/toolkit/closer"
 	hc "github.com/circleci-functions/toolkit/httpcl"
 	"github.com/circleci-functions/toolkit/observability"
 )
@@ -24,6 +24,11 @@ import (
 type Downloader struct {
 	dir    string
 	client *hc.Client
+
+	mu sync.Mutex
+	// downloaded holds the targets this Downloader wrote, the only files it will
+	// hand back without fetching them again.
+	downloaded map[string]bool
 }
 
 // NewDownloader is the constructor for Downloader
@@ -43,11 +48,16 @@ func NewDownloader(ctx context.Context, timeout time.Duration, dir string) (*Dow
 		client: hc.New(ctx, hc.Config{
 			Timeout: timeout,
 		}),
+		downloaded: map[string]bool{},
 	}, nil
 }
 
 // Download downloads the file from the rawURL, to a location rooted at the location specified when constructing
 // the downloader nested to a file location based on the path part of the rawURL.
+//
+// A file already at that location is reused only if this Downloader downloaded it. Anything else is fetched again
+// and replaced: the directory may be shared, such as os.TempDir(), and a file someone else left there could be
+// installed in place of the real download.
 func (d *Downloader) Download(ctx context.Context, rawURL string, perm os.FileMode) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -55,37 +65,21 @@ func (d *Downloader) Download(ctx context.Context, rawURL string, perm os.FileMo
 	}
 
 	target := d.targetPath(u)
-	tmp := target + ".tmp"
 
-	defer func() {
-		cleanup := func() {
-			defer os.Remove(target)
-			defer os.Remove(tmp)
-		}
-
-		// Don't leave half-downloaded or invalid downloads hanging around
-		if p := recover(); p != nil {
-			cleanup()
-			panic(p)
-		} else if err != nil {
-			cleanup()
-		}
-	}()
-
-	if isCached(ctx, target) {
+	d.mu.Lock()
+	reuse := d.downloaded[target]
+	d.mu.Unlock()
+	if reuse && isFile(ctx, target) {
 		return target, nil
 	}
 
-	err = d.downloadFile(ctx, u.String(), tmp, perm)
-	if err != nil {
+	if err := d.downloadFile(ctx, u.String(), target, perm); err != nil {
 		return "", err
 	}
 
-	err = os.Rename(tmp, target)
-	if err != nil {
-		return "", err
-	}
-
+	d.mu.Lock()
+	d.downloaded[target] = true
+	d.mu.Unlock()
 	return target, nil
 }
 
@@ -95,7 +89,13 @@ func (d *Downloader) Remove(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("cannot parse URL: %w", err)
 	}
-	err = os.Remove(d.targetPath(u))
+	target := d.targetPath(u)
+
+	d.mu.Lock()
+	delete(d.downloaded, target)
+	d.mu.Unlock()
+
+	err = os.Remove(target)
 	e := &os.PathError{}
 	if errors.As(err, &e) {
 		return nil
@@ -107,7 +107,7 @@ func (d *Downloader) targetPath(u *url.URL) string {
 	return filepath.Join(d.dir, u.Path)
 }
 
-func isCached(ctx context.Context, target string) bool {
+func isFile(ctx context.Context, target string) bool {
 	info, err := os.Stat(target)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -118,33 +118,47 @@ func isCached(ctx context.Context, target string) bool {
 	return !info.IsDir()
 }
 
-func (d *Downloader) downloadFile(ctx context.Context, url, target string, perm os.FileMode) (err error) {
-	err = os.MkdirAll(filepath.Dir(target), 0755) // #nosec - the downloads are intentionally world-readable
-	if err != nil {
+// downloadFile writes to a new temporary file beside target and renames it into place, so nothing at target, or
+// at a predictable temporary name, is opened and written through.
+func (d *Downloader) downloadFile(ctx context.Context, url, target string, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil { // #nosec - the downloads are intentionally world-readable
 		return fmt.Errorf("could not create directory: %w", err)
 	}
 
-	//#nosec:G304 // this is an executable binary, these permissions are needed.
-	out, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
+	out, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("could not create file: %w", err)
 	}
-	defer closer.ErrorHandler(out, &err)
+	tmp := out.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = out.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
 
 	var resp []byte
 	err = d.client.Call(ctx, hc.NewRequest("GET", url,
 		hc.Timeout(30*time.Second),
 		hc.BytesDecoder(&resp)),
 	)
-
 	if err != nil {
 		return fmt.Errorf("could not get URL %q: %w", url, err)
 	}
 
-	_, err = io.Copy(out, bytes.NewBuffer(resp))
-	if err != nil {
+	if _, err = io.Copy(out, bytes.NewBuffer(resp)); err != nil {
 		return fmt.Errorf("could not write file %q: %w", target, err)
 	}
-
+	if err = out.Chmod(perm); err != nil {
+		return fmt.Errorf("could not set mode of %q: %w", target, err)
+	}
+	if err = out.Close(); err != nil {
+		return fmt.Errorf("could not write file %q: %w", target, err)
+	}
+	if err = os.Rename(tmp, target); err != nil {
+		return fmt.Errorf("could not replace %q: %w", target, err)
+	}
+	renamed = true
 	return nil
 }

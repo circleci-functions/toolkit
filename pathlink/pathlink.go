@@ -93,30 +93,80 @@ func Ensure(opts Options) (Result, error) {
 		return Result{Dir: dir, Verified: true}, nil
 	}
 
-	dir, elevate := ChooseDir(dirs, IndexOf(dirs, opts.Names[0]), opts.Preferred, Writable)
-	if dir == "" {
-		return Result{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
-			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
+	p, err := plan(opts, dirs)
+	if err != nil {
+		return Result{}, err
 	}
-	if elevate {
-		if alt := firstWritable(opts.Preferred); alt != "" && opts.AddToPath != nil {
-			return ensurePrepended(opts, dirs, alt)
-		}
-		if err := rootCanChange(runtime.GOOS, dir); err != nil {
-			return Result{}, needsRoot(opts, dir, err)
-		}
+	if p.AddsToPath {
+		return ensurePrepended(opts, dirs, p.Dir)
 	}
-	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, elevate); err != nil {
-		if elevate {
-			return Result{}, needsRoot(opts, dir, err)
+	if err := linkInto(p.Dir, opts.FromDir, opts.Names, opts.Aliases, p.Elevate); err != nil {
+		if p.Elevate {
+			return Result{}, needsRoot(opts, p.Dir, err)
 		}
 		return Result{}, err
 	}
 
-	if _, err := verify(dirs, opts, dir); err != nil {
-		return Result{Dir: dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], dir, err)
+	if _, err := verify(dirs, opts, p.Dir); err != nil {
+		return Result{Dir: p.Dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], p.Dir, err)
 	}
-	return Result{Dir: dir, Verified: true}, nil
+	return Result{Dir: p.Dir, Verified: true}, nil
+}
+
+// Plan is where Ensure would link, worked out before there is anything to
+// link.
+type Plan struct {
+	// Dir is the directory Ensure would link into.
+	Dir string
+	// Elevate reports that linking into Dir needs sudo.
+	Elevate bool
+	// AddsToPath reports that Dir would be put on PATH through
+	// Options.AddToPath.
+	AddsToPath bool
+}
+
+// Check reports where Ensure would link opts.Names, and fails if it can't: the
+// link needs root, and sudo -n can't provide it or the directory is one root
+// can't change either. A caller runs it before a download, so a job that could
+// never use what it downloads fails first, saying what to change.
+//
+// It needs no FromDir, and assumes something will have to be linked: it
+// doesn't check whether PATH already resolves the right binary.
+func Check(opts Options) (Plan, error) {
+	if len(opts.Names) == 0 {
+		return Plan{}, errors.New("pathlink: Names is required")
+	}
+	if opts.Dir != "" {
+		return Plan{Dir: opts.Dir}, nil
+	}
+	p, err := plan(opts, SearchDirs(opts.Path))
+	if err != nil {
+		return Plan{}, err
+	}
+	if p.Elevate {
+		if err := sudo("true"); err != nil {
+			return Plan{}, needsRoot(opts, p.Dir, err)
+		}
+	}
+	return p, nil
+}
+
+func plan(opts Options, dirs []string) (Plan, error) {
+	dir, elevate := ChooseDir(dirs, IndexOf(dirs, opts.Names[0]), opts.Preferred, Writable)
+	if dir == "" {
+		return Plan{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
+			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
+	}
+	if !elevate {
+		return Plan{Dir: dir}, nil
+	}
+	if alt := firstWritable(opts.Preferred); alt != "" && opts.AddToPath != nil {
+		return Plan{Dir: alt, AddsToPath: true}, nil
+	}
+	if err := rootCanChange(runtime.GOOS, dir); err != nil {
+		return Plan{}, needsRoot(opts, dir, err)
+	}
+	return Plan{Dir: dir, Elevate: true}, nil
 }
 
 // ensurePrepended links into dir, which is not on PATH ahead of the binary it
@@ -254,8 +304,9 @@ func UserBinDirs() []string {
 // ChooseDir picks the directory to link into, by preference rather than PATH
 // order: a version manager rewrites its shims when it rehashes, taking any link
 // left there with it. The choice has to come ahead of the binary already on
-// PATH or it would be shadowed; failing that it takes that one over, which
-// needs elevation if its directory is root-owned.
+// PATH or it would be shadowed; failing that it takes that one over if it can
+// write there, then any writable entry ahead of it, and only then takes it over
+// with elevation.
 //
 // existing is the index to get ahead of, or -1 when PATH holds no such binary.
 func ChooseDir(dirs []string, existing int, preferred []string, writable func(string) bool) (dir string, elevate bool) {
@@ -269,13 +320,16 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 	}
 	// Before scanning: that directory belongs to the tool being replaced, where
 	// an arbitrary writable entry belongs to whatever tool put it there.
-	if existing >= 0 {
-		return dirs[existing], !writable(dirs[existing])
+	if existing >= 0 && writable(dirs[existing]) {
+		return dirs[existing], false
 	}
 	for i, d := range dirs {
 		if ahead(i) && !managed(d) && writable(d) {
 			return d, false
 		}
+	}
+	if existing >= 0 {
+		return dirs[existing], true
 	}
 	if runtime.GOOS == "windows" {
 		return "", false

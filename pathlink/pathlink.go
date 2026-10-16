@@ -220,16 +220,25 @@ func indexOfDir(dirs []string, dir string) int {
 }
 
 // Writable reports whether dir can be linked into without elevation. A missing
-// directory counts if it can be created: ~/.local/bin is often on PATH before
-// it exists.
+// directory counts if it can be created, along with any missing parents, as
+// linkInto would: ~/.local/bin is often on PATH before it, or ~/.local, exists.
 func Writable(dir string) bool {
 	if err := canCreateIn(dir); err == nil {
 		return true
 	}
-	if _, err := os.Stat(dir); err == nil {
-		return false
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		if info, err := os.Stat(parent); err == nil {
+			return info.IsDir() && canCreateIn(parent) == nil
+		}
+		dir = parent
 	}
-	return canCreateIn(filepath.Dir(dir)) == nil
 }
 
 // canCreateIn tries it, rather than reading mode bits: those answer for the

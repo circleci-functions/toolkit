@@ -315,6 +315,12 @@ func TestChooseDir(t *testing.T) {
 			wantElevate: true,
 		},
 		{
+			name:     "a writable entry ahead beats taking over a root-owned directory",
+			existing: 2,
+			writable: writable("/first"),
+			wantDir:  "/first",
+		},
+		{
 			name:     "nothing on PATH, so the earliest writable entry",
 			existing: -1,
 			writable: writable("/second", "/third"),
@@ -531,4 +537,80 @@ func TestEnsure_DoesNotTrySudoOnAMacOSSystemDirectory(t *testing.T) {
 
 	_, statErr := os.Stat(log)
 	assert.Assert(t, os.IsNotExist(statErr), "sudo must not be tried")
+}
+
+// What setup-ruby hit: a writable entry ahead of the root-owned ruby, and sudo
+// tried anyway.
+func TestEnsure_LinksIntoAWritableEntryAheadRatherThanSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	ahead := t.TempDir()
+	log := fakeSudo(t)
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{
+		Path: strings.Join([]string{ahead, dir}, string(os.PathListSeparator)),
+	}))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Result{Dir: ahead, Verified: true})
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestCheck(t *testing.T) {
+	pref := t.TempDir()
+
+	got, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Preferred: []string{pref}, Path: pref})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref})
+}
+
+// Before a download, so a job without passwordless sudo fails without
+// spending it.
+func TestCheck_FailsWhenSudoIsNeededAndRefused(t *testing.T) {
+	dir := readOnlyTool(t)
+	log := refusingSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+
+	_, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Preferred: []string{pref}, Path: dir})
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linking %s into %s needs root: sudo true: sudo: a password is required", tool, dir))
+	assert.ErrorContains(t, err, fmt.Sprintf("; put %s on PATH ahead of %s, or allow passwordless sudo", pref, dir))
+
+	calls, err := os.ReadFile(log) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(calls), "-n true\n", "Check only asks sudo, and changes nothing")
+}
+
+func TestCheck_ReportsSudo(t *testing.T) {
+	dir := readOnlyTool(t)
+	fakeSudo(t)
+
+	got, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Path: dir})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: dir, Elevate: true})
+}
+
+func TestCheck_ReportsAPathPrepend(t *testing.T) {
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+	pref := t.TempDir()
+	called := false
+
+	got, err := pathlink.Check(pathlink.Options{
+		Names:     []string{tool},
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(string) error { called = true; return nil },
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref, AddsToPath: true})
+	assert.Assert(t, !called, "Check must not change PATH")
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "no sudo is needed")
+}
+
+func TestCheck_RequiresNames(t *testing.T) {
+	_, err := pathlink.Check(pathlink.Options{})
+	assert.ErrorContains(t, err, "Names is required")
 }

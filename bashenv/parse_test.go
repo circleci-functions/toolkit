@@ -59,6 +59,22 @@ func TestVars(t *testing.T) {
 			want:    map[string]string{"FOO": "bar baz", "BAZ": "qux"},
 		},
 		{
+			name:    "SingleQuotedIsLiteral",
+			content: "export FOO='$HOME stays'\n",
+			base:    map[string]string{"HOME": "/home/me"},
+			want:    map[string]string{"FOO": "$HOME stays"},
+		},
+		{
+			name:    "EscapedSingleQuote",
+			content: "export FOO='it'\\''s'\n",
+			want:    map[string]string{"FOO": "it's"},
+		},
+		{
+			name:    "EmptySingleQuoted",
+			content: "export FOO=''\n",
+			want:    map[string]string{"FOO": ""},
+		},
+		{
 			name:    "EmptyValue",
 			content: "export FOO=\n",
 			want:    map[string]string{"FOO": ""},
@@ -105,6 +121,24 @@ func TestVars_ReadsWhatAddToPathWrote(t *testing.T) {
 	vars, err := bashenv.Vars(path, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, vars["GOPATH"], "/go")
+}
+
+// ExportEnvVars quotes values for bash, and Vars has to undo exactly that.
+func TestVars_ReadsBackWhatExportEnvVarsWrote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env.sh")
+	t.Setenv("BASH_ENV", path)
+	want := map[string]string{
+		"SPECIAL": `a b$(echo pwn)'c`,
+		"QUOTES":  `'"'`,
+		"EMPTY":   "",
+		"REF":     "$PATH",
+	}
+
+	assert.NilError(t, bashenv.ExportEnvVars(want))
+
+	got, err := bashenv.Vars(path, map[string]string{"PATH": "/usr/bin"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
 }
 
 func TestPath_NoPathExport_FallsBackToProcessPath(t *testing.T) {

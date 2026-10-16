@@ -8,12 +8,13 @@ import (
 	"strings"
 )
 
-// ExportEnvVars appends vars to $BASH_ENV.
+// ExportEnvVars appends vars to $BASH_ENV, each value single-quoted so a later
+// step gets it exactly as given, with nothing in it expanded or run.
 // Returns an error if $BASH_ENV is not set.
 func ExportEnvVars(vars map[string]string) error {
 	var sb strings.Builder
 	for key, val := range vars {
-		fmt.Fprintf(&sb, "export %s=%s\n", key, val)
+		fmt.Fprintf(&sb, "export %s=%s\n", key, quote(val))
 	}
 	return appendToBashEnv(sb.String())
 }
@@ -27,14 +28,23 @@ func AddToPath(path string) error {
 // AddAlias sets aliases to be expanded in shell scripts and appends
 // a shell alias definition to $BASH_ENV for each name:command
 // pair, so that later steps in the same job resolve name as command.
+// The command is single-quoted, so it is expanded when the alias runs rather
+// than when $BASH_ENV is sourced.
 // Returns an error if $BASH_ENV is not set.
 func AddAlias(aliases map[string]string) error {
 	var sb strings.Builder
 	sb.WriteString("shopt -s expand_aliases\n")
 	for k, v := range aliases {
-		fmt.Fprintf(&sb, "alias %s=%q\n", k, v)
+		fmt.Fprintf(&sb, "alias %s=%s\n", k, quote(v))
 	}
 	return appendToBashEnv(sb.String())
+}
+
+// quote returns s as a single POSIX shell word that a shell reads back as s,
+// expanding nothing in it. Within single quotes nothing is special, so each '
+// closes the quotes, adds an escaped quote, and reopens them.
+func quote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // appendToBashEnv appends content to $BASH_ENV.
@@ -45,7 +55,7 @@ func appendToBashEnv(content string) error {
 		return fmt.Errorf("BASH_ENV must be set to configure")
 	}
 
-	f, err := os.OpenFile(bashEnv, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666) //nolint:gosec
+	f, err := os.OpenFile(bashEnv, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec
 	if err != nil {
 		return err
 	}

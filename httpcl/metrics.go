@@ -105,7 +105,7 @@ func (m *Metrics) Run(ctx context.Context) error {
 	return nil
 }
 
-const gaugePrefix = "backplane.gauge.httpclient."
+const gaugePrefix = "httpclient.gauge."
 
 func (m *Metrics) sendGauges(ctx context.Context) {
 	for _, g := range m.gauges() {
@@ -188,7 +188,7 @@ func (m *Metrics) WithTracer(ctx context.Context, route string) context.Context 
 			}
 			duration := time.Since(requestDoneAt)
 
-			m.rep.Timing(ctx, "backplane.httpclient.req.first_byte",
+			m.rep.Timing(ctx, "httpclient.req.first_byte",
 				duration, r.commonTags)
 			m.rep.SetSpanAttribute(ctx, "req.first_byte", duration)
 		},
@@ -259,7 +259,7 @@ func (m *Metrics) WithTracer(ctx context.Context, route string) context.Context 
 			r.mu.Unlock()
 
 			m.rep.SetSpanAttribute(r.ctx, "req.wrote_request", duration)
-			m.rep.Timing(ctx, "backplane.httpclient.req.wrote", duration, r.commonTags)
+			m.rep.Timing(ctx, "httpclient.req.wrote", duration, r.commonTags)
 		},
 	}
 	return httptrace.WithClientTrace(ctx, trace)
@@ -351,7 +351,7 @@ func (r *request) gotCon(info httptrace.GotConnInfo) {
 		if info.WasIdle {
 			tags["idle"] = trueTagVal
 			// this is the time this connection was idle - if this is low the pool is filling
-			r.m.rep.Timing(r.ctx, "backplane.httpclient.con.idle",
+			r.m.rep.Timing(r.ctx, "httpclient.con.idle",
 				info.IdleTime, r.commonTags)
 			r.m.rep.SetSpanAttribute(r.ctx, "req.con_idle", info.IdleTime)
 		} else {
@@ -373,7 +373,7 @@ func (r *request) gotCon(info httptrace.GotConnInfo) {
 		// This is the stand-alone metric that tells us how long it took to physically form a
 		// connection including DNS, and TLS handshake, but excluding any internal delays
 		// (due to enforced maximum connections etc.)
-		r.m.rep.Timing(r.ctx, "backplane.httpclient.con.new",
+		r.m.rep.Timing(r.ctx, "httpclient.con.new",
 			makeConnectionDuration, commonTags)
 		r.m.rep.SetSpanAttribute(r.ctx, "req.con_new", makeConnectionDuration)
 
@@ -386,12 +386,12 @@ func (r *request) gotCon(info httptrace.GotConnInfo) {
 				"coalesced": strconv.FormatBool(c.dns.coalesced),
 				"error":     strconv.FormatBool(c.dns.error),
 			})
-			r.m.rep.Timing(r.ctx, "backplane.httpclient.con.dns", dur, dnsTags)
+			r.m.rep.Timing(r.ctx, "httpclient.con.dns", dur, dnsTags)
 			r.m.rep.SetSpanAttribute(r.ctx, "req.con_dns", dur)
 		}
 		if !c.tlsDoneAt.IsZero() {
 			dur := c.tlsDoneAt.Sub(c.tlsStartAt)
-			r.m.rep.Timing(r.ctx, "backplane.httpclient.con.tls", dur, commonTags)
+			r.m.rep.Timing(r.ctx, "httpclient.con.tls", dur, commonTags)
 			r.m.rep.SetSpanAttribute(r.ctx, "req.con_tls", dur)
 		}
 	}
@@ -399,5 +399,5 @@ func (r *request) gotCon(info httptrace.GotConnInfo) {
 	tagList := r.commonTagsWith(tags)
 	r.m.rep.SetSpanAttribute(r.ctx, "req.con_wait", internalConnDelay)
 	// this metric measures delays in fully internal logic, and is a strong measure of client contention.
-	r.m.rep.Timing(r.ctx, "backplane.httpclient.con.wait", internalConnDelay, tagList)
+	r.m.rep.Timing(r.ctx, "httpclient.con.wait", internalConnDelay, tagList)
 }

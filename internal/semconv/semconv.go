@@ -17,9 +17,6 @@ import (
 )
 
 const (
-	// clientName is optional and can be used differentiate two clients to the same host within a service
-	clientName = "backplane.client.name"
-
 	ErrorType   = string(semconv.ErrorTypeKey)
 	ErrorDetail = "error.detail" // not part of semconv, but typically used to capture 'warning' detail
 )
@@ -43,11 +40,10 @@ func HTTPClientTiming(opts Timing) map[string]any {
 }
 
 type RequestVals struct {
-	Req        *http.Request
-	Route      string
-	Attempt    int
-	ClientName string
-	ClientIP   string
+	Req      *http.Request
+	Route    string
+	Attempt  int
+	ClientIP string
 }
 
 // HTTPClientRequest returns fields that match the semantic conventions for HTTP clients
@@ -55,7 +51,6 @@ type RequestVals struct {
 func HTTPClientRequest(v RequestVals) map[string]any {
 	u := cleanURL(v.Req)
 	as := attributes{
-		clientName:                        v.ClientName,
 		semconv.URLTemplateKey:            v.Route,
 		semconv.HTTPRequestMethodKey:      v.Req.Method,
 		semconv.URLFullKey:                u.String(),

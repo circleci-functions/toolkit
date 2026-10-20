@@ -386,7 +386,7 @@ func (r *CompositeReporter) reportError(ctx context.Context,
 
 	r.errorHandler.ReportError(lvl, err, mergeFields(r.baseFields, ctx, fields...))
 
-	r.logInternalError(ctx, r.metrics.Incr("backplane.error-report", Fields{
+	r.logInternalError(ctx, r.metrics.Incr("error-report", Fields{
 		"level":    lvl.String(),
 		"redacted": redacted,
 	}))

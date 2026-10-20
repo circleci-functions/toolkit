@@ -707,10 +707,9 @@ func (a *attempter) attempt(ctx context.Context, isFinal func(detail responseDet
 	})
 	o11y.SetSpanAttributes(ctx, semconv.LegacyReqToAttributes(req, a.attempts))
 	o11y.SetSpanAttributes(ctx, semconv.HTTPClientRequest(semconv.RequestVals{
-		Req:        req,
-		Route:      a.r.route,
-		Attempt:    a.attempts,
-		ClientName: a.c.name,
+		Req:     req,
+		Route:   a.r.route,
+		Attempt: a.attempts,
 	}))
 
 	res, err := a.c.httpClient.Do(req)
@@ -725,7 +724,7 @@ func (a *attempter) attempt(ctx context.Context, isFinal func(detail responseDet
 		_ = res.Body.Close()
 	}()
 
-	o11y.Timing(ctx, "backplane.httpclient.duration",
+	o11y.Timing(ctx, "httpclient.duration",
 		time.Since(before),
 		semconv.HTTPClientTiming(semconv.Timing{
 			Name:           a.c.name,

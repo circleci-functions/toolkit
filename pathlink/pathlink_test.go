@@ -238,6 +238,7 @@ func captureStderr(t *testing.T, fn func()) string {
 
 // An unwritable directory fails before the binary it holds is touched.
 func TestEnsure_LeavesTheOriginalIntactWhenItCannotLink(t *testing.T) {
+	skipUnlessModesApply(t)
 	from := fakeTool(t)
 	dir := t.TempDir()
 	original := filepath.Join(dir, tool)
@@ -374,6 +375,7 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, pathlink.Writable(filepath.Join(dir, ".local", "bin")),
 		"so does one whose parent is missing too, since linking creates both")
 
+	skipUnlessModesApply(t)
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
 	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
 	assert.Assert(t, !pathlink.Writable(dir))
@@ -462,14 +464,33 @@ func refusingSudo(t *testing.T) (log string) {
 // without elevation.
 func readOnlyTool(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("a read-only mode does not stop writes to a directory on Windows")
-	}
+	return readOnlyDir(t, tool)
+}
+
+// readOnlyDir returns a directory holding files, that cannot be linked into
+// without elevation.
+func readOnlyDir(t *testing.T, files ...string) string {
+	t.Helper()
+	skipUnlessModesApply(t)
 	dir := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0755))
+	for _, f := range files {
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, f), []byte("#!/bin/sh\n"), 0755))
+	}
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
 	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
 	return dir
+}
+
+// skipUnlessModesApply skips a test that relies on a read-only directory
+// refusing writes, which it does for neither Windows nor root.
+func skipUnlessModesApply(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only mode does not stop writes to a directory on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root can write to a read-only directory")
+	}
 }
 
 // Under sudo the original is kept too, and ln -n replaces a destination that
@@ -636,6 +657,48 @@ func TestCheck_ReportsAPathPrepend(t *testing.T) {
 
 	_, err = os.Stat(log)
 	assert.Assert(t, os.IsNotExist(err), "no sudo is needed")
+}
+
+// With no tool on PATH and no entry it can write to, the only choice left is
+// /usr/local/bin. When PATH doesn't hold that either, a link there would
+// resolve for nobody, so Check fails before a download rather than Ensure
+// after it.
+func TestCheck_FailsWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	dir := readOnlyDir(t)
+	log := fakeSudo(t)
+
+	_, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Path: dir})
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: no directory on PATH can hold %s, and %s is not on PATH", tool, pathlink.DefaultBinDir))
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestEnsure_LinksNothingWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyDir(t)
+	log := fakeSudo(t)
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "is not on PATH")
+	assert.Assert(t, !strings.Contains(err.Error(), "linked"), err.Error())
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestCheck_PrependsInsteadWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	dir := readOnlyDir(t)
+	pref := t.TempDir()
+
+	got, err := pathlink.Check(pathlink.Options{
+		Names:     []string{tool},
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(string) error { return nil },
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref, AddsToPath: true})
 }
 
 func TestCheck_RequiresNames(t *testing.T) {

@@ -173,11 +173,18 @@ func plan(opts Options, dirs []string) (Plan, error) {
 		return Plan{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
 			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
 	}
-	if !elevate {
+	// ChooseDir falls back to DefaultBinDir even when PATH doesn't hold it, and
+	// a link there would resolve for nobody.
+	onPath := indexOfDir(dirs, dir) >= 0
+	if !elevate && onPath {
 		return Plan{Dir: dir}, nil
 	}
 	if alt := firstWritable(opts.Preferred); alt != "" && opts.AddToPath != nil {
 		return Plan{Dir: alt, AddsToPath: true}, nil
+	}
+	if !onPath {
+		return Plan{}, fmt.Errorf("pathlink: no directory on PATH can hold %s, and %s is not on PATH (PATH=%s)",
+			opts.Names[0], dir, strings.Join(dirs, string(os.PathListSeparator)))
 	}
 	if err := rootCanChange(runtime.GOOS, dir); err != nil {
 		return Plan{}, needsRoot(opts, dir, err)

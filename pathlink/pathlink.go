@@ -41,6 +41,12 @@ type Options struct {
 	// Ensure only checks that PATH resolves Names[0] to the directory it linked
 	// into, which catches shadowing but not a lookalike.
 	Verify func(bin string) error
+	// AddToPath, when set, puts a directory on PATH for later steps, as
+	// bashenv.AddToPath does. Ensure uses it instead of sudo when the only way
+	// onto PATH would need root: it links into the first writable Preferred
+	// directory and has AddToPath put that ahead. A PATH prepend reaches only
+	// steps that source $BASH_ENV, which is why it is not the first choice.
+	AddToPath func(dir string) error
 }
 
 // Result describes what Ensure did.
@@ -50,12 +56,24 @@ type Result struct {
 	// Verified reports that PATH was confirmed to resolve Names[0]. False when
 	// Dir skipped discovery, since that directory need not be on PATH.
 	Verified bool
+	// AddedToPath reports that Dir was put on PATH through Options.AddToPath,
+	// so it resolves only in steps that source $BASH_ENV.
+	AddedToPath bool
 }
 
 // Ensure makes opts.Names resolvable by name, and reports where it linked them.
 //
 // Unless opts.Dir skips discovery, it fails if PATH does not then resolve
-// Names[0] to what was linked, rather than letting the job run something else.
+// Names[0] to what was linked, rather than letting the job run something else,
+// and removes the links it made, putting back what they replaced.
+//
+// Where getting onto PATH would need root, it links elsewhere and calls
+// opts.AddToPath if that is set. Otherwise it uses sudo -n, except in the macOS
+// system directories that root can't change either, and a failure names what
+// the job could change instead.
+//
+// A binary it replaces is kept beside the link as <name>.pathlink-old, and
+// reported on stderr.
 func Ensure(opts Options) (Result, error) {
 	if len(opts.Names) == 0 || opts.FromDir == "" {
 		return Result{}, errors.New("pathlink: Names and FromDir are required")
@@ -63,9 +81,11 @@ func Ensure(opts Options) (Result, error) {
 	dirs := SearchDirs(opts.Path)
 
 	if opts.Dir != "" {
-		if err := linkInto(opts.Dir, opts.FromDir, opts.Names, opts.Aliases, false); err != nil {
+		c, err := linkInto(opts.Dir, opts.FromDir, opts.Names, opts.Aliases, false)
+		if err != nil {
 			return Result{}, err
 		}
+		c.commit()
 		return Result{Dir: opts.Dir}, nil
 	}
 
@@ -76,19 +96,159 @@ func Ensure(opts Options) (Result, error) {
 		return Result{Dir: dir, Verified: true}, nil
 	}
 
-	dir, elevate := ChooseDir(dirs, IndexOf(dirs, opts.Names[0]), opts.Preferred, Writable)
-	if dir == "" {
-		return Result{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
-			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
+	p, err := plan(opts, dirs)
+	if err != nil {
+		return Result{}, err
 	}
-	if err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, elevate); err != nil {
+	if p.AddsToPath {
+		return ensurePrepended(opts, dirs, p.Dir)
+	}
+	c, err := linkInto(p.Dir, opts.FromDir, opts.Names, opts.Aliases, p.Elevate)
+	if err != nil {
+		if p.Elevate {
+			return Result{}, needsRoot(opts, p.Dir, err)
+		}
 		return Result{}, err
 	}
 
-	if _, err := verify(dirs, opts, dir); err != nil {
-		return Result{Dir: dir}, fmt.Errorf("pathlink: linked %s into %s, but %w", opts.Names[0], dir, err)
+	if _, err := verify(dirs, opts, p.Dir); err != nil {
+		return Result{Dir: p.Dir}, unverified(opts, p.Dir, c, err)
 	}
-	return Result{Dir: dir, Verified: true}, nil
+	c.commit()
+	return Result{Dir: p.Dir, Verified: true}, nil
+}
+
+// unverified undoes links PATH doesn't resolve as it should, rather than
+// leaving them to shadow whatever later steps would otherwise run, and
+// explains why. It says what was linked only if something was.
+func unverified(opts Options, dir string, c *changes, cause error) error {
+	if c.empty() {
+		return fmt.Errorf("pathlink: %w", cause)
+	}
+	err := fmt.Errorf("pathlink: linked %s into %s, but %w, so removed the links again", opts.Names[0], dir, cause)
+	return errors.Join(err, c.undo())
+}
+
+// Plan is where Ensure would link, worked out before there is anything to
+// link.
+type Plan struct {
+	// Dir is the directory Ensure would link into.
+	Dir string
+	// Elevate reports that linking into Dir needs sudo.
+	Elevate bool
+	// AddsToPath reports that Dir would be put on PATH through
+	// Options.AddToPath.
+	AddsToPath bool
+}
+
+// Check reports where Ensure would link opts.Names, and fails if it can't: the
+// link needs root, and sudo -n can't provide it or the directory is one root
+// can't change either. A caller runs it before a download, so a job that could
+// never use what it downloads fails first, saying what to change.
+//
+// It needs no FromDir, and assumes something will have to be linked: it
+// doesn't check whether PATH already resolves the right binary.
+func Check(opts Options) (Plan, error) {
+	if len(opts.Names) == 0 {
+		return Plan{}, errors.New("pathlink: Names is required")
+	}
+	if opts.Dir != "" {
+		return Plan{Dir: opts.Dir}, nil
+	}
+	p, err := plan(opts, SearchDirs(opts.Path))
+	if err != nil {
+		return Plan{}, err
+	}
+	if p.Elevate {
+		if err := sudo("true"); err != nil {
+			return Plan{}, needsRoot(opts, p.Dir, err)
+		}
+	}
+	return p, nil
+}
+
+func plan(opts Options, dirs []string) (Plan, error) {
+	dir, elevate := ChooseDir(dirs, IndexOf(dirs, opts.Names[0]), opts.Preferred, Writable)
+	if dir == "" {
+		return Plan{}, fmt.Errorf("pathlink: no directory on PATH can hold %s (PATH=%s)",
+			opts.Names[0], strings.Join(dirs, string(os.PathListSeparator)))
+	}
+	// ChooseDir falls back to DefaultBinDir even when PATH doesn't hold it, and
+	// a link there would resolve for nobody.
+	onPath := indexOfDir(dirs, dir) >= 0
+	if !elevate && onPath {
+		return Plan{Dir: dir}, nil
+	}
+	if alt := firstWritable(opts.Preferred); alt != "" && opts.AddToPath != nil {
+		return Plan{Dir: alt, AddsToPath: true}, nil
+	}
+	if !onPath {
+		return Plan{}, fmt.Errorf("pathlink: no directory on PATH can hold %s, and %s is not on PATH (PATH=%s)",
+			opts.Names[0], dir, strings.Join(dirs, string(os.PathListSeparator)))
+	}
+	if err := rootCanChange(runtime.GOOS, dir); err != nil {
+		return Plan{}, needsRoot(opts, dir, err)
+	}
+	return Plan{Dir: dir, Elevate: true}, nil
+}
+
+// ensurePrepended links into dir, which is not on PATH ahead of the binary it
+// has to beat, and has opts.AddToPath put it there once the link checks out.
+func ensurePrepended(opts Options, dirs []string, dir string) (Result, error) {
+	c, err := linkInto(dir, opts.FromDir, opts.Names, opts.Aliases, false)
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := verify(append([]string{dir}, dirs...), opts, dir); err != nil {
+		return Result{Dir: dir}, unverified(opts, dir, c, err)
+	}
+	if err := opts.AddToPath(dir); err != nil {
+		return Result{Dir: dir}, errors.Join(fmt.Errorf("pathlink: put %s on PATH: %w", dir, err), c.undo())
+	}
+	c.commit()
+	return Result{Dir: dir, Verified: true, AddedToPath: true}, nil
+}
+
+func firstWritable(dirs []string) string {
+	for _, d := range dirs {
+		if Writable(d) {
+			return d
+		}
+	}
+	return ""
+}
+
+// errProtected is why sudo is not even tried on a macOS system directory.
+var errProtected = errors.New("macOS System Integrity Protection keeps even root from changing it")
+
+// rootCanChange reports errProtected for a directory that sudo can't change
+// either, so trying would only fail with a misleading message.
+func rootCanChange(goos, dir string) error {
+	if goos != "darwin" {
+		return nil
+	}
+	switch filepath.Clean(dir) {
+	case "/bin", "/sbin", "/usr/bin", "/usr/sbin":
+		return errProtected
+	}
+	return nil
+}
+
+// needsRoot explains a link that needed root and didn't get it, with what the
+// job can change so that it doesn't need it.
+func needsRoot(opts Options, dir string, cause error) error {
+	instead := firstWritable(opts.Preferred)
+	if instead == "" && len(opts.Preferred) > 0 {
+		instead = opts.Preferred[0]
+	}
+	if instead == "" {
+		instead = "a writable directory"
+	}
+	fix := fmt.Sprintf("put %s on PATH ahead of %s", instead, dir)
+	if !errors.Is(cause, errProtected) {
+		fix += ", or allow passwordless sudo"
+	}
+	return fmt.Errorf("pathlink: linking %s into %s needs root: %w; %s", opts.Names[0], dir, cause, fix)
 }
 
 // verify reports the directory PATH resolves Names[0] from, once satisfied it
@@ -169,8 +329,9 @@ func UserBinDirs() []string {
 // ChooseDir picks the directory to link into, by preference rather than PATH
 // order: a version manager rewrites its shims when it rehashes, taking any link
 // left there with it. The choice has to come ahead of the binary already on
-// PATH or it would be shadowed; failing that it takes that one over, which
-// needs elevation if its directory is root-owned.
+// PATH or it would be shadowed; failing that it takes that one over if it can
+// write there, then any writable entry ahead of it, and only then takes it over
+// with elevation.
 //
 // existing is the index to get ahead of, or -1 when PATH holds no such binary.
 func ChooseDir(dirs []string, existing int, preferred []string, writable func(string) bool) (dir string, elevate bool) {
@@ -184,13 +345,16 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 	}
 	// Before scanning: that directory belongs to the tool being replaced, where
 	// an arbitrary writable entry belongs to whatever tool put it there.
-	if existing >= 0 {
-		return dirs[existing], !writable(dirs[existing])
+	if existing >= 0 && writable(dirs[existing]) {
+		return dirs[existing], false
 	}
 	for i, d := range dirs {
 		if ahead(i) && !managed(d) && writable(d) {
 			return d, false
 		}
+	}
+	if existing >= 0 {
+		return dirs[existing], true
 	}
 	if runtime.GOOS == "windows" {
 		return "", false
@@ -220,16 +384,25 @@ func indexOfDir(dirs []string, dir string) int {
 }
 
 // Writable reports whether dir can be linked into without elevation. A missing
-// directory counts if it can be created: ~/.local/bin is often on PATH before
-// it exists.
+// directory counts if it can be created, along with any missing parents, as
+// linkInto would: ~/.local/bin is often on PATH before it, or ~/.local, exists.
 func Writable(dir string) bool {
 	if err := canCreateIn(dir); err == nil {
 		return true
 	}
-	if _, err := os.Stat(dir); err == nil {
-		return false
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		if info, err := os.Stat(parent); err == nil {
+			return info.IsDir() && canCreateIn(parent) == nil
+		}
+		dir = parent
 	}
-	return canCreateIn(filepath.Dir(dir)) == nil
 }
 
 // canCreateIn tries it, rather than reading mode bits: those answer for the

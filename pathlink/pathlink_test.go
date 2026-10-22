@@ -2,6 +2,7 @@ package pathlink_test
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -153,26 +154,91 @@ func TestEnsure_RequiresNamesAndFromDir(t *testing.T) {
 	assert.ErrorContains(t, err, "Names and FromDir are required")
 }
 
-// Taking over a directory leaves no backup behind once the link is in place.
-func TestEnsure_ReplacesTheBinaryItTakesOver(t *testing.T) {
+// Taking over a directory keeps what it replaced beside the link, and says so.
+func TestEnsure_KeepsTheBinaryItTakesOver(t *testing.T) {
 	from := fakeTool(t)
 	dir := t.TempDir()
 	original := filepath.Join(dir, tool)
 	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
 
-	_, err := pathlink.Ensure(options(from, pathlink.Options{Dir: dir, Path: dir}))
-	assert.NilError(t, err)
+	stderr := captureStderr(t, func() {
+		_, err := pathlink.Ensure(options(from, pathlink.Options{Dir: dir, Path: dir}))
+		assert.NilError(t, err)
+	})
 
 	target, err := os.Readlink(original)
 	assert.NilError(t, err)
 	assert.Equal(t, target, filepath.Join(from, tool))
 
-	_, err = os.Stat(original + ".pathlink-old")
-	assert.Assert(t, os.IsNotExist(err), "the backup must be discarded once the link is in place")
+	kept, err := os.ReadFile(original + ".pathlink-old") //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(kept), "#!/bin/sh\necho original\n")
+	assert.Equal(t, stderr, fmt.Sprintf("pathlink: replaced %s, keeping the original as %s.pathlink-old\n", original, tool))
+}
+
+// A second takeover replaces the first one's link, and must not keep that
+// over the original.
+func TestEnsure_KeepsTheOriginalAcrossTakeovers(t *testing.T) {
+	first, second := fakeTool(t), fakeTool(t)
+	dir := t.TempDir()
+	original := filepath.Join(dir, tool)
+	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
+
+	_, err := pathlink.Ensure(options(first, pathlink.Options{Dir: dir, Path: dir}))
+	assert.NilError(t, err)
+	stderr := captureStderr(t, func() {
+		_, err = pathlink.Ensure(options(second, pathlink.Options{Dir: dir, Path: dir}))
+		assert.NilError(t, err)
+	})
+
+	target, err := os.Readlink(original)
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(second, tool))
+
+	kept, err := os.ReadFile(original + ".pathlink-old") //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(kept), "#!/bin/sh\necho original\n")
+	assert.Equal(t, stderr, "")
+
+	entries, err := os.ReadDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 2, "only the link and the original may be left")
+}
+
+// A rerun finds its own link in place, which is nothing to keep.
+func TestEnsure_LeavesItsOwnLinkAlone(t *testing.T) {
+	from := fakeTool(t)
+	dir := t.TempDir()
+
+	for range 2 {
+		_, err := pathlink.Ensure(options(from, pathlink.Options{Dir: dir, Path: dir}))
+		assert.NilError(t, err)
+	}
+
+	_, err := os.Lstat(filepath.Join(dir, tool+".pathlink-old"))
+	assert.Assert(t, os.IsNotExist(err), "a link to the same binary is not an original")
+}
+
+// captureStderr returns what fn writes to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	assert.NilError(t, err)
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	fn()
+
+	assert.NilError(t, w.Close())
+	out, err := io.ReadAll(r)
+	assert.NilError(t, err)
+	return string(out)
 }
 
 // An unwritable directory fails before the binary it holds is touched.
 func TestEnsure_LeavesTheOriginalIntactWhenItCannotLink(t *testing.T) {
+	skipUnlessModesApply(t)
 	from := fakeTool(t)
 	dir := t.TempDir()
 	original := filepath.Join(dir, tool)
@@ -250,6 +316,12 @@ func TestChooseDir(t *testing.T) {
 			wantElevate: true,
 		},
 		{
+			name:     "a writable entry ahead beats taking over a root-owned directory",
+			existing: 2,
+			writable: writable("/first"),
+			wantDir:  "/first",
+		},
+		{
 			name:     "nothing on PATH, so the earliest writable entry",
 			existing: -1,
 			writable: writable("/second", "/third"),
@@ -300,11 +372,34 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, pathlink.Writable(dir))
 	assert.Assert(t, pathlink.Writable(filepath.Join(dir, "not-yet")),
 		"a PATH entry that can be created counts as writable")
+	assert.Assert(t, pathlink.Writable(filepath.Join(dir, ".local", "bin")),
+		"so does one whose parent is missing too, since linking creates both")
 
+	skipUnlessModesApply(t)
 	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
 	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
 	assert.Assert(t, !pathlink.Writable(dir))
 	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child")))
+	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child", "grandchild")))
+}
+
+func TestWritable_UnderAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	assert.NilError(t, os.WriteFile(file, nil, 0600))
+
+	assert.Assert(t, !pathlink.Writable(filepath.Join(file, "bin")))
+}
+
+// The case that sent a link through sudo: ~/.local/bin on PATH, and no
+// ~/.local yet.
+func TestEnsure_CreatesMissingParentsOfAPreferredDir(t *testing.T) {
+	from := fakeTool(t)
+	bin := filepath.Join(t.TempDir(), ".local", "bin")
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{Preferred: []string{bin}, Path: bin}))
+	assert.NilError(t, err)
+	assert.Equal(t, got.Dir, bin)
+	assert.Assert(t, got.Verified)
 }
 
 // Aliases replace a shell alias, which only bash would have seen. setup-python
@@ -339,4 +434,343 @@ func TestEnsure_LinksAliasesEvenWhenTheBinaryAlreadyResolves(t *testing.T) {
 	target, err := os.Readlink(filepath.Join(from, "othertool"))
 	assert.NilError(t, err)
 	assert.Equal(t, target, filepath.Join(from, tool))
+}
+
+// fakeSudo puts a sudo on PATH that records its arguments, one call per line,
+// and succeeds without running anything.
+func fakeSudo(t *testing.T) (log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0755))
+	t.Setenv("PATH", dir)
+	return log
+}
+
+// refusingSudo puts a sudo on PATH that records its arguments and refuses, as
+// sudo -n does without passwordless sudo.
+func refusingSudo(t *testing.T) (log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\necho 'sudo: a password is required' >&2\nexit 1\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0755))
+	t.Setenv("PATH", dir)
+	return log
+}
+
+// readOnlyTool returns a directory holding a tool that cannot be linked over
+// without elevation.
+func readOnlyTool(t *testing.T) string {
+	t.Helper()
+	return readOnlyDir(t, tool)
+}
+
+// readOnlyDir returns a directory holding files, that cannot be linked into
+// without elevation.
+func readOnlyDir(t *testing.T, files ...string) string {
+	t.Helper()
+	skipUnlessModesApply(t)
+	dir := t.TempDir()
+	for _, f := range files {
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, f), []byte("#!/bin/sh\n"), 0755))
+	}
+	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
+	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
+	return dir
+}
+
+// skipUnlessModesApply skips a test that relies on a read-only directory
+// refusing writes, which it does for neither Windows nor root.
+func skipUnlessModesApply(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only mode does not stop writes to a directory on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root can write to a read-only directory")
+	}
+}
+
+// Under sudo the original is kept too, and ln -n replaces a destination that
+// is a symlink to a directory rather than making the link inside it. The fake
+// sudo changes nothing, so PATH still resolves the original, and the link is
+// undone through sudo as well.
+func TestEnsure_SudoKeepsTheOriginalAndReplacesTheEntry(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+	dst := filepath.Join(dir, tool)
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "so removed the links again")
+
+	calls, err := os.ReadFile(log) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(calls), fmt.Sprintf("-n mv %s %s.pathlink-old\n-n ln -sfn %s %s\n-n rm -f %s\n-n mv %s.pathlink-old %s\n",
+		dst, dst, filepath.Join(from, tool), dst, dst, dst, dst))
+}
+
+// Slim and Alpine images often have no sudo, and sudo is then not there to
+// say what went wrong.
+func TestEnsure_SaysWhySudoFailedWhenItIsNotInstalled(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "sudo mv: exec: \"sudo\": executable file not found")
+}
+
+// A link that would need root goes into a writable preferred directory
+// instead, when the caller can put that on PATH.
+func TestEnsure_PrefersAPathPrependToSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+	var added []string
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(d string) error { added = append(added, d); return nil },
+	}))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Result{Dir: pref, Verified: true, AddedToPath: true})
+	assert.DeepEqual(t, added, []string{pref})
+
+	target, err := os.Readlink(filepath.Join(pref, tool))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(from, tool))
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+// Without a way to change PATH, sudo is still the fallback, and its failure
+// says what would avoid it.
+func TestEnsure_SaysHowToAvoidSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	refusingSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Preferred: []string{pref}, Path: dir}))
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linking %s into %s needs root: ", tool, dir))
+	assert.ErrorContains(t, err, "sudo: a password is required")
+	assert.ErrorContains(t, err, fmt.Sprintf("; put %s on PATH ahead of %s, or allow passwordless sudo", pref, dir))
+}
+
+// macOS's System Integrity Protection keeps even root out of /usr/bin, so
+// sudo can't help there.
+func TestEnsure_DoesNotTrySudoOnAMacOSSystemDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	from := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(from, "true"), []byte("#!/bin/sh\necho "+from+"\n"), 0755))
+	log := fakeSudo(t)
+
+	_, err := pathlink.Ensure(pathlink.Options{
+		Names:     []string{"true"},
+		FromDir:   from,
+		Preferred: []string{"/nonexistent/bin"},
+		Path:      "/usr/bin",
+		Verify:    verifyFrom(from),
+	})
+	assert.ErrorContains(t, err, "pathlink: linking true into /usr/bin needs root: macOS System Integrity Protection")
+	assert.ErrorContains(t, err, "; put /nonexistent/bin on PATH ahead of /usr/bin")
+	assert.Assert(t, !strings.Contains(err.Error(), "sudo"), err.Error())
+
+	_, statErr := os.Stat(log)
+	assert.Assert(t, os.IsNotExist(statErr), "sudo must not be tried")
+}
+
+// What setup-ruby hit: a writable entry ahead of the root-owned ruby, and sudo
+// tried anyway.
+func TestEnsure_LinksIntoAWritableEntryAheadRatherThanSudo(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	ahead := t.TempDir()
+	log := fakeSudo(t)
+
+	got, err := pathlink.Ensure(options(from, pathlink.Options{
+		Path: strings.Join([]string{ahead, dir}, string(os.PathListSeparator)),
+	}))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Result{Dir: ahead, Verified: true})
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestCheck(t *testing.T) {
+	pref := t.TempDir()
+
+	got, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Preferred: []string{pref}, Path: pref})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref})
+}
+
+// Before a download, so a job without passwordless sudo fails without
+// spending it.
+func TestCheck_FailsWhenSudoIsNeededAndRefused(t *testing.T) {
+	dir := readOnlyTool(t)
+	log := refusingSudo(t)
+	pref := filepath.Join(t.TempDir(), "bin")
+
+	_, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Preferred: []string{pref}, Path: dir})
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linking %s into %s needs root: sudo true: sudo: a password is required", tool, dir))
+	assert.ErrorContains(t, err, fmt.Sprintf("; put %s on PATH ahead of %s, or allow passwordless sudo", pref, dir))
+
+	calls, err := os.ReadFile(log) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(calls), "-n true\n", "Check only asks sudo, and changes nothing")
+}
+
+func TestCheck_ReportsSudo(t *testing.T) {
+	dir := readOnlyTool(t)
+	fakeSudo(t)
+
+	got, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Path: dir})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: dir, Elevate: true})
+}
+
+func TestCheck_ReportsAPathPrepend(t *testing.T) {
+	dir := readOnlyTool(t)
+	log := fakeSudo(t)
+	pref := t.TempDir()
+	called := false
+
+	got, err := pathlink.Check(pathlink.Options{
+		Names:     []string{tool},
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(string) error { called = true; return nil },
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref, AddsToPath: true})
+	assert.Assert(t, !called, "Check must not change PATH")
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "no sudo is needed")
+}
+
+// With no tool on PATH and no entry it can write to, the only choice left is
+// /usr/local/bin. When PATH doesn't hold that either, a link there would
+// resolve for nobody, so Check fails before a download rather than Ensure
+// after it.
+func TestCheck_FailsWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	dir := readOnlyDir(t)
+	log := fakeSudo(t)
+
+	_, err := pathlink.Check(pathlink.Options{Names: []string{tool}, Path: dir})
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: no directory on PATH can hold %s, and %s is not on PATH", tool, pathlink.DefaultBinDir))
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestEnsure_LinksNothingWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyDir(t)
+	log := fakeSudo(t)
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir}))
+	assert.ErrorContains(t, err, "is not on PATH")
+	assert.Assert(t, !strings.Contains(err.Error(), "linked"), err.Error())
+
+	_, err = os.Stat(log)
+	assert.Assert(t, os.IsNotExist(err), "sudo must not be tried")
+}
+
+func TestCheck_PrependsInsteadWhenTheFallbackDirIsNotOnPath(t *testing.T) {
+	dir := readOnlyDir(t)
+	pref := t.TempDir()
+
+	got, err := pathlink.Check(pathlink.Options{
+		Names:     []string{tool},
+		Preferred: []string{pref},
+		Path:      dir,
+		AddToPath: func(string) error { return nil },
+	})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, pathlink.Plan{Dir: pref, AddsToPath: true})
+}
+
+func TestCheck_RequiresNames(t *testing.T) {
+	_, err := pathlink.Check(pathlink.Options{})
+	assert.ErrorContains(t, err, "Names is required")
+}
+
+// A link PATH doesn't resolve as it should would still shadow what a later
+// step runs, so it is taken back out.
+func TestEnsure_RemovesLinksThatFailVerification(t *testing.T) {
+	from := fakeTool(t)
+	early := t.TempDir()
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{early},
+		Path:      early,
+		Verify:    verifyFrom("/somewhere/else"),
+	}))
+	assert.ErrorContains(t, err, fmt.Sprintf("pathlink: linked %s into %s, but PATH resolves", tool, early))
+	assert.ErrorContains(t, err, "so removed the links again")
+
+	_, err = os.Lstat(filepath.Join(early, tool))
+	assert.Assert(t, os.IsNotExist(err), "the link must be gone")
+}
+
+func TestEnsure_RestoresWhatItTookOverWhenVerificationFails(t *testing.T) {
+	from := fakeTool(t)
+	dir := t.TempDir()
+	original := filepath.Join(dir, tool)
+	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
+
+	stderr := captureStderr(t, func() {
+		_, err := pathlink.Ensure(options(from, pathlink.Options{Path: dir, Verify: verifyFrom("/somewhere/else")}))
+		assert.ErrorContains(t, err, "so removed the links again")
+	})
+	assert.Equal(t, stderr, "", "nothing was replaced in the end")
+
+	got, err := os.ReadFile(original) //nolint:gosec // a path this test chose
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "#!/bin/sh\necho original\n")
+
+	entries, err := os.ReadDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 1, "no backup may be left once the original is back")
+}
+
+// setup-go --detect-only on Homebrew: PATH already reaches FromDir, so there
+// is nothing to link, and the error must not say there was.
+func TestEnsure_DoesNotClaimALinkItDidNotMake(t *testing.T) {
+	from := fakeTool(t)
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{Path: from, Verify: verifyFrom("/somewhere/else")}))
+	assert.ErrorContains(t, err, "pathlink: PATH resolves mytool to ")
+	assert.Assert(t, !strings.Contains(err.Error(), "linked"), err.Error())
+}
+
+func TestEnsure_DoesNotChangePathForALinkThatFailsVerification(t *testing.T) {
+	from := fakeTool(t)
+	dir := readOnlyTool(t)
+	fakeSudo(t)
+	pref := t.TempDir()
+	called := false
+
+	_, err := pathlink.Ensure(options(from, pathlink.Options{
+		Preferred: []string{pref},
+		Path:      dir,
+		Verify:    verifyFrom("/somewhere/else"),
+		AddToPath: func(string) error { called = true; return nil },
+	}))
+	assert.ErrorContains(t, err, "so removed the links again")
+	assert.Assert(t, !called, "PATH must not be changed for a link that was removed")
+
+	_, err = os.Lstat(filepath.Join(pref, tool))
+	assert.Assert(t, os.IsNotExist(err), "the link must be gone")
 }

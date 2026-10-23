@@ -4,16 +4,6 @@ description: >
   Shared CI commands for function repos in the circleci-functions org.
 
 commands:
-  private-mod-init:
-    description: >
-      Configure git so `go mod download` can fetch private modules in the
-      circleci-functions org, such as github.com/circleci-functions/toolkit.
-    steps:
-      - run:
-          name: Allow private module access
-          command: |
-            git config --global url."https://x-access-token:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
-
   setup-aws-oidc:
     description: >
       Set up the standard AWS_ environment variables so the AWS SDK can assume a
@@ -54,7 +44,7 @@ jobs:
     description: >
       Open, update or close the "Release vX.Y.Z" PR for a function repo. Run it on
       main, after the tests, with a context that provides a GITHUB_TOKEN that can
-      write PRs and read private modules. The repo needs release-pr as a go tool.
+      write PRs. The repo needs release-pr as a go tool.
     parameters:
       executor:
         type: executor
@@ -65,7 +55,6 @@ jobs:
     executor: << parameters.executor >>
     steps:
       - checkout
-      - private-mod-init
       - restore_cache:
           keys:
             - << parameters.cache-prefix >>-{{ checksum "go.sum" }}-
@@ -78,8 +67,8 @@ jobs:
     description: >
       Make the GitHub release and tag, then `task publish`, when this push merged a
       release PR. It halts on every other push. Run it on main, after the tests, with
-      a context that provides a GITHUB_TOKEN that can write releases and read private
-      modules, and the functions publisher context.
+      a context that provides a GITHUB_TOKEN that can write releases, and the
+      functions publisher context.
     parameters:
       executor:
         type: executor
@@ -94,7 +83,6 @@ jobs:
     executor: << parameters.executor >>
     steps:
       - checkout
-      - private-mod-init
       - restore_cache:
           keys:
             - << parameters.cache-prefix >>-{{ checksum "go.sum" }}-

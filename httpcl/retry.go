@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v7"
 )
 
 // retry is customized for the httpclient and is coupled to it, in that the httpclient operation must honour

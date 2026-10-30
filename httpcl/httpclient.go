@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v7"
 
 	"github.com/circleci-functions/toolkit/correlation"
 	"github.com/circleci-functions/toolkit/internal/semconv"

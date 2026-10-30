@@ -60,3 +60,34 @@ func (t *Teardown) SaveCache(ctx context.Context, key string, paths []string, op
 	})
 	return err
 }
+
+// StoreArtifacts registers the file or directory at path to be stored as a
+// job artifact at the end of the job. destination sets the path shown in the
+// artifacts list; if empty, path itself is used, relative to the filesystem root.
+//
+// It returns once the registration is accepted, not once the store has run.
+// It returns ErrNoServer if the function isn't running inside a CircleCI job.
+func (t *Teardown) StoreArtifacts(ctx context.Context, path, destination string) error {
+	_, err := t.client.do(ctx, "/step/artifacts/store", storeArtifactsRequest{
+		Path:        path,
+		Destination: destination,
+		Teardown:    true,
+		When:        t.when,
+	})
+	return err
+}
+
+// StoreTestResults registers the XML test-result files under path to be
+// stored at the end of the job so CircleCI can parse them and surface timing
+// and failure information in the web app.
+//
+// It returns once the registration is accepted, not once the store has run.
+// It returns ErrNoServer if the function isn't running inside a CircleCI job.
+func (t *Teardown) StoreTestResults(ctx context.Context, path string) error {
+	_, err := t.client.do(ctx, "/step/test-results/store", storeTestResultsRequest{
+		Path:     path,
+		Teardown: true,
+		When:     t.when,
+	})
+	return err
+}

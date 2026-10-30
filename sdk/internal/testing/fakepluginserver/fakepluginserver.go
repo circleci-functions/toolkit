@@ -58,6 +58,16 @@ func (s *Server) RestoreCache(handler http.Handler) {
 	s.mux.Handle("/step/cache/restore", handler)
 }
 
+// StoreArtifacts serves handler for the /step/artifacts/store route.
+func (s *Server) StoreArtifacts(handler http.Handler) {
+	s.mux.Handle("/step/artifacts/store", handler)
+}
+
+// StoreTestResults serves handler for the /step/test-results/store route.
+func (s *Server) StoreTestResults(handler http.Handler) {
+	s.mux.Handle("/step/test-results/store", handler)
+}
+
 // Dir returns a fresh temp directory suitable for a socket, without
 // starting a server — for tests exercising sdk's "no server running"
 // fallback.

@@ -22,12 +22,14 @@ import (
 	"github.com/circleci-functions/toolkit/sdk"
 )
 
-// Server is an in-memory cache a function under test can save to and restore
-// from. Its behaviour mirrors CircleCI's, including write-once keys and saves
-// registered to run at the end of the job.
+// Server is an in-memory stand-in for the privileged operations sdk performs.
+// It handles cache save/restore, artifact storage, and test-result storage,
+// including operations registered to run at the end of the job.
 type Server struct {
-	srv   *httptest.Server
-	cache *cacheStore
+	srv         *httptest.Server
+	cache       *cacheStore
+	artifacts   *artifactStore
+	testResults *testResultStore
 }
 
 // Option configures a Server.
@@ -45,7 +47,7 @@ func WithMutableKeys() Option {
 	}
 }
 
-// NewServer starts an in-memory cache and registers cleanup with t.
+// NewServer starts an in-memory server and registers cleanup with t.
 func NewServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 
@@ -57,11 +59,16 @@ func NewServer(t *testing.T, opts ...Option) *Server {
 		opt(cs)
 	}
 
+	as := &artifactStore{}
+	trs := &testResultStore{}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/step/cache/save", cs.handleSave)
 	mux.HandleFunc("/step/cache/restore", cs.handleRestore)
+	mux.HandleFunc("/step/artifacts/store", as.handleStore)
+	mux.HandleFunc("/step/test-results/store", trs.handleStore)
 
-	s := &Server{srv: httptest.NewServer(mux), cache: cs}
+	s := &Server{srv: httptest.NewServer(mux), cache: cs, artifacts: as, testResults: trs}
 	t.Cleanup(s.srv.Close)
 	return s
 }
@@ -117,6 +124,34 @@ func (s *Server) endJob(t *testing.T, succeeded bool) {
 			t.Fatalf("save cache %q at end of job: %v", p.key, err)
 		}
 	}
+
+	s.artifacts.mu.Lock()
+	pendingArtifacts := s.artifacts.pending
+	s.artifacts.pending = nil
+	s.artifacts.mu.Unlock()
+
+	for _, p := range slices.Backward(pendingArtifacts) {
+		if !runsWhen(p.when, succeeded) {
+			continue
+		}
+		s.artifacts.mu.Lock()
+		s.artifacts.stored = append(s.artifacts.stored, StoredArtifact{Path: p.path, Destination: p.destination})
+		s.artifacts.mu.Unlock()
+	}
+
+	s.testResults.mu.Lock()
+	pendingTestResults := s.testResults.pending
+	s.testResults.pending = nil
+	s.testResults.mu.Unlock()
+
+	for _, p := range slices.Backward(pendingTestResults) {
+		if !runsWhen(p.when, succeeded) {
+			continue
+		}
+		s.testResults.mu.Lock()
+		s.testResults.stored = append(s.testResults.stored, p.path)
+		s.testResults.mu.Unlock()
+	}
 }
 
 // Client returns an sdk.Client that performs its cache operations here.
@@ -154,6 +189,59 @@ func (s *Server) SavedKeys() []string {
 	return keys
 }
 
+// StoredArtifact records an artifact stored immediately or at the end of the job.
+type StoredArtifact struct {
+	Path        string
+	Destination string
+}
+
+// StoredArtifacts returns the artifacts stored so far, in the order they were stored.
+// Artifacts still registered for the end of the job are not included; see
+// PendingArtifactStores.
+func (s *Server) StoredArtifacts() []StoredArtifact {
+	s.artifacts.mu.Lock()
+	defer s.artifacts.mu.Unlock()
+	out := make([]StoredArtifact, len(s.artifacts.stored))
+	copy(out, s.artifacts.stored)
+	return out
+}
+
+// PendingArtifactStores returns the paths of artifact stores registered to run
+// at the end of the job and not yet run, in the order they were registered.
+func (s *Server) PendingArtifactStores() []string {
+	s.artifacts.mu.Lock()
+	defer s.artifacts.mu.Unlock()
+	paths := make([]string, 0, len(s.artifacts.pending))
+	for _, p := range s.artifacts.pending {
+		paths = append(paths, p.path)
+	}
+	return paths
+}
+
+// StoredTestResultPaths returns the paths of test results stored so far, in
+// the order they were stored. Test results still registered for the end of the
+// job are not included; see PendingTestResultStores.
+func (s *Server) StoredTestResultPaths() []string {
+	s.testResults.mu.Lock()
+	defer s.testResults.mu.Unlock()
+	out := make([]string, len(s.testResults.stored))
+	copy(out, s.testResults.stored)
+	return out
+}
+
+// PendingTestResultStores returns the paths of test-result stores registered
+// to run at the end of the job and not yet run, in the order they were
+// registered.
+func (s *Server) PendingTestResultStores() []string {
+	s.testResults.mu.Lock()
+	defer s.testResults.mu.Unlock()
+	paths := make([]string, 0, len(s.testResults.pending))
+	for _, p := range s.testResults.pending {
+		paths = append(paths, p.path)
+	}
+	return paths
+}
+
 type cacheEntry struct {
 	paths    []string
 	storeDir string
@@ -173,9 +261,10 @@ type pendingSave struct {
 	when  string
 }
 
-// runsWhen reports whether this registration runs given the job's outcome.
-func (p pendingSave) runsWhen(jobSucceeded bool) bool {
-	switch p.when {
+// runsWhen reports whether a registration with when runs given the job's
+// outcome.
+func runsWhen(when string, jobSucceeded bool) bool {
+	switch when {
 	case "on_success":
 		return jobSucceeded
 	case "on_fail":
@@ -183,6 +272,11 @@ func (p pendingSave) runsWhen(jobSucceeded bool) bool {
 	default:
 		return true
 	}
+}
+
+// runsWhen reports whether this registration runs given the job's outcome.
+func (p pendingSave) runsWhen(jobSucceeded bool) bool {
+	return runsWhen(p.when, jobSucceeded)
 }
 
 type cacheStore struct {
@@ -219,7 +313,7 @@ func (cs *cacheStore) handleSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeResult(w, "success")
+	writeSuccess(w)
 }
 
 // save copies paths into the store under key. A key already written is left
@@ -274,7 +368,7 @@ func (cs *cacheStore) handleRestore(w http.ResponseWriter, r *http.Request) {
 		}
 		break
 	}
-	writeResult(w, "success")
+	writeSuccess(w)
 }
 
 // match returns the entry a restore of key gets, or nil for a miss.
@@ -300,11 +394,11 @@ func (cs *cacheStore) match(key string) *cacheEntry {
 	return best
 }
 
-func writeResult(w http.ResponseWriter, result string) {
+func writeSuccess(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Result string `json:"result"`
-	}{result})
+	}{"success"})
 }
 
 // writeDeferred matches the agent: 202, and no result, since the step has not run.
@@ -355,4 +449,81 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// pendingArtifact is an artifact store registered to run at the end of the job.
+type pendingArtifact struct {
+	path        string
+	destination string
+	when        string
+}
+
+type artifactStore struct {
+	mu      sync.Mutex
+	stored  []StoredArtifact
+	pending []pendingArtifact
+}
+
+func (as *artifactStore) handleStore(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path        string `json:"path"`
+		Destination string `json:"destination"`
+		Teardown    bool   `json:"teardown"`
+		When        string `json:"when"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Teardown {
+		as.mu.Lock()
+		as.pending = append(as.pending, pendingArtifact{path: req.Path, destination: req.Destination, when: req.When})
+		as.mu.Unlock()
+		writeDeferred(w)
+		return
+	}
+
+	as.mu.Lock()
+	as.stored = append(as.stored, StoredArtifact{Path: req.Path, Destination: req.Destination})
+	as.mu.Unlock()
+	writeSuccess(w)
+}
+
+// pendingTestResult is a test-result store registered to run at the end of the
+// job.
+type pendingTestResult struct {
+	path string
+	when string
+}
+
+type testResultStore struct {
+	mu      sync.Mutex
+	stored  []string
+	pending []pendingTestResult
+}
+
+func (trs *testResultStore) handleStore(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path     string `json:"path"`
+		Teardown bool   `json:"teardown"`
+		When     string `json:"when"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Teardown {
+		trs.mu.Lock()
+		trs.pending = append(trs.pending, pendingTestResult{path: req.Path, when: req.When})
+		trs.mu.Unlock()
+		writeDeferred(w)
+		return
+	}
+
+	trs.mu.Lock()
+	trs.stored = append(trs.stored, req.Path)
+	trs.mu.Unlock()
+	writeSuccess(w)
 }

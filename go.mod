@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.2.10
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
-	github.com/cenkalti/backoff/v5 v5.0.3
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	go.opentelemetry.io/otel v1.44.0

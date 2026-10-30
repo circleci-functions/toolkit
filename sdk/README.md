@@ -60,6 +60,10 @@ rotation.
 | `client.AtTeardown().SaveCache(ctx, key, paths)` | `error` | Register a cache save to run at the end of the job |
 | `client.AtTeardown().OnFail()`, `.OnSuccess()` | `*Teardown` | Narrow a registration to a job outcome |
 | `sdk.WithStepName(name)` | `CacheOption` | Name the step a save or restore creates |
+| `client.StoreArtifacts(ctx, path, destination)` | `error` | Store a file or directory as a job artifact |
+| `client.StoreTestResults(ctx, path)` | `error` | Store XML test results for the web app |
+| `client.AtTeardown().StoreArtifacts(ctx, path, destination)` | `error` | Register an artifact store to run at the end of the job |
+| `client.AtTeardown().StoreTestResults(ctx, path)` | `error` | Register a test-result store to run at the end of the job |
 
 `sdk.ErrNoServer` is returned when the function is not running inside a CircleCI job. Use `errors.Is(err, sdk.ErrNoServer)` to detect this.
 
@@ -95,6 +99,35 @@ Use `OnFail` or `OnSuccess` to register work for one job outcome only, for examp
 client.AtTeardown().OnFail().SaveCache(ctx, key, paths)
 ```
 
+### Storing artifacts and test results
+
+`StoreArtifacts` uploads a file or directory to the job's artifact store so it
+is available for download from the CircleCI web app once the job completes.
+`destination` sets the path shown in the artifact list; pass an empty string to
+use `path` itself, relative to the filesystem root.
+
+```go
+if err := client.StoreArtifacts(ctx, "./dist/tool", "bin/tool"); err != nil {
+    return fmt.Errorf("store artifact: %w", err)
+}
+```
+
+`StoreTestResults` uploads XML test-result files so CircleCI can parse them and
+surface timing and failure information:
+
+```go
+if err := client.StoreTestResults(ctx, "./test-results"); err != nil {
+    return fmt.Errorf("store test results: %w", err)
+}
+```
+
+Both operations support `AtTeardown` the same way `SaveCache` does:
+
+```go
+client.AtTeardown().OnFail().StoreArtifacts(ctx, "./logs", "logs")
+client.AtTeardown().StoreTestResults(ctx, "./test-results")
+```
+
 ## Testing
 
 `sdktest` gives you an in-memory cache and a sandbox, and needs nothing beyond
@@ -121,7 +154,11 @@ func TestRun(t *testing.T) {
 ```
 
 `srv.SavedKeys()` returns what the function saved, so you can assert it
-partitions its keys the way you intended.
+partitions its keys the way you intended. `srv.StoredArtifacts()` and
+`srv.StoredTestResultPaths()` return the artifacts and test-result paths stored
+so far. For deferred stores, `srv.PendingArtifactStores()` and
+`srv.PendingTestResultStores()` report what is registered before `EndJob` runs
+it.
 
 The in-memory cache mirrors CircleCI's behaviour:
 

@@ -4,7 +4,7 @@ jobs:
   test:
     docker:
       - image: cimg/go:1.26
-      - image: chrislusf/seaweedfs:4.40
+      - image: chrislusf/seaweedfs:4.48
         entrypoint: /bin/sh
         command:
           - -c

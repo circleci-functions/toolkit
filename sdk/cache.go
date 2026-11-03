@@ -118,6 +118,10 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrUnsupported
+	}
+
 	var result serverResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("sdk: decode response: %w", err)

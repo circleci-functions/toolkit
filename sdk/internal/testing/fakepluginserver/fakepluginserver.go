@@ -68,6 +68,11 @@ func (s *Server) StoreTestResults(handler http.Handler) {
 	s.mux.Handle("/step/test-results/store", handler)
 }
 
+// SetOutput serves handler for the /step/output/set route.
+func (s *Server) SetOutput(handler http.Handler) {
+	s.mux.Handle("/step/output/set", handler)
+}
+
 // Dir returns a fresh temp directory suitable for a socket, without
 // starting a server — for tests exercising sdk's "no server running"
 // fallback.

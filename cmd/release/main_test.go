@@ -6,7 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"go.yaml.in/yaml/v4"
 	"gotest.tools/v3/assert"
+
+	"github.com/circleci-functions/toolkit/functionyaml"
 )
 
 func TestValidateVersion(t *testing.T) {
@@ -58,6 +61,56 @@ jobs:
           with:
             version: "1.20"
 `)
+}
+
+func TestMarshalDescriptorKeepsOutputs(t *testing.T) {
+	data := []byte(`name: widget
+outputs:
+  - name: digest
+    type: string
+    description: Digest of the pushed image.
+  - name: token
+    type: string
+    secret: true
+`)
+	out, err := marshalDescriptor(data, "widget", "v1.2.3")
+	assert.NilError(t, err)
+
+	var d functionyaml.Descriptor
+	assert.NilError(t, yaml.Unmarshal(out, &d))
+	assert.DeepEqual(t, d.Outputs, []functionyaml.Output{
+		{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+		{Name: "token", Type: "string", Secret: true},
+	})
+}
+
+func TestMarshalDescriptorRejectsInvalidOutputs(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data string
+		err  string
+	}{
+		{
+			name: "unknown type",
+			data: "name: widget\noutputs:\n  - {name: digest, type: object}\n",
+			err:  `invalid function.yaml: widget: output "digest" has type "object"`,
+		},
+		{
+			name: "bad name",
+			data: "name: widget\noutputs:\n  - {name: 1digest, type: string}\n",
+			err:  `invalid function.yaml: widget: output name "1digest"`,
+		},
+		{
+			name: "duplicate",
+			data: "name: widget\noutputs:\n  - {name: digest, type: string}\n  - {name: digest, type: int}\n",
+			err:  `invalid function.yaml: widget: duplicate output "digest"`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := marshalDescriptor([]byte(tt.data), "widget", "v1.2.3")
+			assert.ErrorContains(t, err, tt.err)
+		})
+	}
 }
 
 // A step selects a command with its key, as `- widget/install:`, so the

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/alecthomas/kong"
 	"go.yaml.in/yaml/v4"
@@ -16,6 +19,9 @@ import (
 // Flags are accepted there directly, and Default names the command that runs
 // when none is given, whose own flags are accepted there too.
 //
+// Outputs are the values the function sets for later steps to read. They belong
+// to the function as a whole, so every command shares them.
+//
 // Example is the config a user writes to run the function, rendered by
 // RenderExample from the flags' example values; it is derived, so a release
 // overwrites any value already set.
@@ -26,7 +32,18 @@ type Descriptor struct {
 	Example     string             `yaml:"example,omitempty"`
 	Default     string             `yaml:"default,omitempty"`
 	Flags       []Flag             `yaml:"flags,omitempty"`
+	Outputs     []Output           `yaml:"outputs,omitempty"`
 	Commands    map[string]Command `yaml:"commands,omitempty"`
+}
+
+// Output describes one value the function sets for later steps to read. Type
+// is string, bool, int or list, where a list is a list of strings. A Secret
+// output is masked in the job's logs once it is set.
+type Output struct {
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`
+	Description string `yaml:"description,omitempty"`
+	Secret      bool   `yaml:"secret,omitempty"`
 }
 
 // Command describes one CLI subcommand, which may itself nest subcommands.
@@ -187,13 +204,16 @@ func Write(w io.Writer, d Descriptor) error {
 	return enc.Encode(d)
 }
 
-// Validate checks d has a name, and every command/flag is named and typed,
-// with no duplicate flags.
+// Validate checks d has a name, every command/flag is named and typed with no
+// duplicate flags, and every output has a valid, unique name and a known type.
 func Validate(d Descriptor) error {
 	if d.Name == "" {
 		return fmt.Errorf("name is required")
 	}
 	if err := validateFlags(d.Flags, d.Name); err != nil {
+		return err
+	}
+	if err := validateOutputs(d.Outputs, d.Name); err != nil {
 		return err
 	}
 	if d.Default != "" {
@@ -242,6 +262,28 @@ func validateFlags(flags []Flag, path string) error {
 		seen[f.Name] = true
 		if f.Type == "" {
 			return fmt.Errorf("%s: flag %q has no type", path, f.Name)
+		}
+	}
+	return nil
+}
+
+var (
+	outputName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+	outputTypes = []string{"string", "bool", "int", "list"}
+)
+
+func validateOutputs(outputs []Output, path string) error {
+	seen := make(map[string]bool, len(outputs))
+	for _, o := range outputs {
+		if !outputName.MatchString(o.Name) {
+			return fmt.Errorf("%s: output name %q must be letters, digits, - and _, starting with a letter", path, o.Name)
+		}
+		if seen[o.Name] {
+			return fmt.Errorf("%s: duplicate output %q", path, o.Name)
+		}
+		seen[o.Name] = true
+		if !slices.Contains(outputTypes, o.Type) {
+			return fmt.Errorf("%s: output %q has type %q, must be one of %s", path, o.Name, o.Type, strings.Join(outputTypes, ", "))
 		}
 	}
 	return nil

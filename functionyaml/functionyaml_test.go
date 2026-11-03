@@ -210,6 +210,26 @@ func TestEmbedDescribe(t *testing.T) {
 	assert.Assert(t, strings.Contains(d.Example, "widget: github.com/circleci-functions/toolkit@<version>"), d.Example)
 }
 
+func TestEmbedDescribeReplaces(t *testing.T) {
+	type cli struct {
+		Install struct{} `cmd:""`
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"),
+		functionyaml.Embed(functionyaml.Replaces("circleci/maven", "circleci/gradle")))
+	assert.NilError(t, err)
+
+	var buf bytes.Buffer
+	k.Stdout = &buf
+	k.Exit = func(int) {}
+
+	_, _ = k.Parse([]string{"--describe"})
+
+	var d functionyaml.Descriptor
+	assert.NilError(t, yaml.Unmarshal(buf.Bytes(), &d))
+	assert.DeepEqual(t, d.Replaces, []string{"circleci/maven", "circleci/gradle"})
+}
+
 // Mirrors setup-node: no default subcommand, so the hook must fire and exit
 // before kong's "must select a command" validation runs.
 func TestEmbedDescribeNoDefaultSubcommand(t *testing.T) {
@@ -366,6 +386,40 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "valid replaces",
+			d:    functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/maven", "circleci/gradle"}},
+		},
+		{
+			name:    "replaces an orb with no namespace",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"maven"}},
+			wantErr: `widget: replaces "maven", which isn't an orb name`,
+		},
+		{
+			name:    "replaces an orb with an empty name",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/"}},
+			wantErr: `replaces "circleci/", which isn't an orb name`,
+		},
+		{
+			name:    "replaces an orb at a version",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/maven@2.4.0"}},
+			wantErr: `replaces "circleci/maven@2.4.0", which isn't an orb name`,
+		},
+		{
+			name:    "replaces an orb path with too many parts",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/maven/extra"}},
+			wantErr: `replaces "circleci/maven/extra", which isn't an orb name`,
+		},
+		{
+			name:    "replaces an orb name with a space",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/ maven"}},
+			wantErr: `replaces "circleci/ maven", which isn't an orb name`,
+		},
+		{
+			name:    "replaces the same orb twice",
+			d:       functionyaml.Descriptor{Name: "widget", Replaces: []string{"circleci/maven", "circleci/maven"}},
+			wantErr: `widget: replaces "circleci/maven" more than once`,
+		},
+		{
 			name: "invalid nested subcommand",
 			d: functionyaml.Descriptor{
 				Name: "widget",
@@ -394,6 +448,7 @@ func TestWrite(t *testing.T) {
 	d := functionyaml.Descriptor{
 		Name:        "widget",
 		Description: "Installs a widget.",
+		Replaces:    []string{"circleci/widget"},
 		Version:     "v1.0.0",
 		Commands: map[string]functionyaml.Command{
 			"install": {

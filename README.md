@@ -64,6 +64,29 @@ A function built without kong sets `example:` on the flag in a checked-in
 `function.yaml` instead. `--dry-run` prints the example a release would publish,
 and fails if a required flag has no example value.
 
+### Replaced orbs
+
+`replaces` in `function.yaml` lists the orbs a function is meant to be used
+instead of, so tools can suggest the function for a config that uses one of
+them. Name each orb as `namespace/name`, without a version. With kong, pass them
+to `Embed`:
+
+```go
+kong.Parse(&flags,
+	kong.Name("setup-java"),
+	functionyaml.Embed(functionyaml.Replaces("circleci/maven", "circleci/gradle")),
+)
+```
+
+```yaml
+name: setup-java
+replaces:
+  - circleci/maven
+  - circleci/gradle
+```
+
+Leave it out when no orb does what the function does.
+
 ## `cmd/release-pr`
 
 Releases a function by merging a release PR. The version is the newest

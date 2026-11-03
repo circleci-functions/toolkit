@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
+	"unicode"
 
 	"github.com/alecthomas/kong"
 	"go.yaml.in/yaml/v4"
@@ -19,9 +21,13 @@ import (
 // Example is the config a user writes to run the function, rendered by
 // RenderExample from the flags' example values; it is derived, so a release
 // overwrites any value already set.
+//
+// Replaces names the orbs, as namespace/name, that the function is meant to be
+// used instead of, so tools can suggest it for a config that uses one of them.
 type Descriptor struct {
 	Name        string             `yaml:"name"`
 	Description string             `yaml:"description,omitempty"`
+	Replaces    []string           `yaml:"replaces,omitempty"`
 	Version     string             `yaml:"version,omitempty"`
 	Example     string             `yaml:"example,omitempty"`
 	Default     string             `yaml:"default,omitempty"`
@@ -152,11 +158,32 @@ func flagType(target reflect.Value) string {
 	return t.Kind().String()
 }
 
+// Option sets published metadata the CLI itself can't express on the schema
+// that --describe prints.
+type Option func(*Descriptor)
+
+// Replaces records the orbs, as namespace/name, that the function is meant to
+// be used instead of.
+func Replaces(orbs ...string) Option {
+	return func(d *Descriptor) {
+		d.Replaces = append(d.Replaces, orbs...)
+	}
+}
+
 // Embed adds a hidden --describe flag that prints the schema and exits
 // during Parse, before any command runs — same mechanism as VersionFlag.
-func Embed() kong.Option {
-	return kong.Embed(&describeFlag{})
+func Embed(opts ...Option) kong.Option {
+	return kong.OptionFunc(func(k *kong.Kong) error {
+		if err := kong.Embed(&describeFlag{}).Apply(k); err != nil {
+			return err
+		}
+		return kong.Bind(describeOptions(opts)).Apply(k)
+	})
 }
+
+// describeOptions carries Embed's options to the --describe hook. It has its
+// own type because kong resolves a hook's arguments by type.
+type describeOptions []Option
 
 type describeFlag struct {
 	Describe describeAction `hidden:"" help:"Print this function's schema and exit."`
@@ -166,8 +193,11 @@ type describeAction bool
 
 // BeforeReset only fires when --describe is in argv; field values aren't
 // applied yet, so d itself isn't checked here — same as VersionFlag.
-func (d describeAction) BeforeReset(app *kong.Kong) error {
+func (d describeAction) BeforeReset(app *kong.Kong, opts describeOptions) error {
 	desc := FromKong(app.Model)
+	for _, opt := range opts {
+		opt(&desc)
+	}
 	example, err := RenderExample(desc, localRef(desc.Name))
 	if err != nil {
 		return err
@@ -187,11 +217,14 @@ func Write(w io.Writer, d Descriptor) error {
 	return enc.Encode(d)
 }
 
-// Validate checks d has a name, and every command/flag is named and typed,
-// with no duplicate flags.
+// Validate checks d has a name, every replaced orb is named as namespace/name,
+// and every command/flag is named and typed, with no duplicate flags.
 func Validate(d Descriptor) error {
 	if d.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	if err := validateReplaces(d); err != nil {
+		return err
 	}
 	if err := validateFlags(d.Flags, d.Name); err != nil {
 		return err
@@ -205,6 +238,22 @@ func Validate(d Descriptor) error {
 		return err
 	}
 	return validateCommands(d.Commands, d.Name)
+}
+
+func validateReplaces(d Descriptor) error {
+	seen := make(map[string]bool, len(d.Replaces))
+	for _, orb := range d.Replaces {
+		namespace, name, ok := strings.Cut(orb, "/")
+		malformed := strings.Contains(name, "/") || strings.Contains(orb, "@") || strings.ContainsFunc(orb, unicode.IsSpace)
+		if !ok || namespace == "" || name == "" || malformed {
+			return fmt.Errorf("%s: replaces %q, which isn't an orb name: give it as namespace/name, without a version", d.Name, orb)
+		}
+		if seen[orb] {
+			return fmt.Errorf("%s: replaces %q more than once", d.Name, orb)
+		}
+		seen[orb] = true
+	}
+	return nil
 }
 
 func validateCommands(cmds map[string]Command, path string) error {

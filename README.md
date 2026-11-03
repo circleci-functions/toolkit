@@ -64,6 +64,24 @@ A function built without kong sets `example:` on the flag in a checked-in
 `function.yaml` instead. `--dry-run` prints the example a release would publish,
 and fails if a required flag has no example value.
 
+### Pre-releases
+
+```
+go tool release --name <function-name> --prerelease [--dry-run]
+```
+
+publishes a build of the checked-out commit to test before releasing it. Its
+version is a Go pseudo-version, one patch above the newest release tag, such as
+`v0.7.1-0.20261103142233-abcdef123456`. It doesn't move `release.txt`, so it never
+becomes the latest, and `circleci function list` and `get` show it only with
+`--include-pseudo`. A config pins it like any other version. Its objects are
+tagged `prerelease=true`, and the bucket deletes them after 30 days. Rerunning it
+on the same commit succeeds without publishing again.
+
+In CI, the orb's `publish-prerelease` job runs `task publish-prerelease`. It
+needs the `functions-prerelease` context, whose role can publish only
+pseudo-versions, from a branch, when a maintainer triggered the pipeline.
+
 ## `cmd/release-pr`
 
 Releases a function by merging a release PR. The version is the newest

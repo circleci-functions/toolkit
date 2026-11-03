@@ -64,6 +64,15 @@ func TestReleaser_Publish(t *testing.T) {
 		checksums = string(b)
 
 		assert.Check(t, golden.String(checksums, "expected-checksums.txt"))
+
+		tResp, err := fix.Client.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+			Bucket: &fix.Bucket,
+			Key:    aws.String("app/0.0.1-dev/checksums.txt"),
+		})
+		assert.Assert(t, err)
+		assert.Check(t, cmp.DeepEqual(tResp.TagSet, []types.Tag{
+			{Key: aws.String("tag-name"), Value: aws.String("tag-value")},
+		}, cmpopts.IgnoreUnexported(types.Tag{})))
 	}))
 
 	assert.Assert(t, t.Run("Check checksums are written to disk", func(t *testing.T) {

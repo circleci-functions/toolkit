@@ -366,6 +366,85 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "valid outputs",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Outputs: []functionyaml.Output{
+					{Name: "digest", Type: "string", Description: "Digest.", Secret: true},
+					{Name: "is-new", Type: "bool"},
+					{Name: "retry_count", Type: "int"},
+					{Name: "Tags2", Type: "list"},
+				},
+			},
+		},
+		{
+			name: "output with no name",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Type: "string"}},
+			},
+			wantErr: `widget: output name "" must be`,
+		},
+		{
+			name: "output name starting with a digit",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "1digest", Type: "string"}},
+			},
+			wantErr: `widget: output name "1digest" must be`,
+		},
+		{
+			name: "output name starting with a dash",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "-digest", Type: "string"}},
+			},
+			wantErr: `widget: output name "-digest" must be`,
+		},
+		{
+			name: "output name with a dot",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "image.digest", Type: "string"}},
+			},
+			wantErr: `widget: output name "image.digest" must be`,
+		},
+		{
+			name: "output with no type",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "digest"}},
+			},
+			wantErr: `widget: output "digest" has type "", must be one of string, bool, int, list`,
+		},
+		{
+			name: "output typed as a flag kind",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "tags", Type: "slice"}},
+			},
+			wantErr: `widget: output "tags" has type "slice"`,
+		},
+		{
+			name: "output typed as a float",
+			d: functionyaml.Descriptor{
+				Name:    "widget",
+				Outputs: []functionyaml.Output{{Name: "ratio", Type: "float64"}},
+			},
+			wantErr: `widget: output "ratio" has type "float64"`,
+		},
+		{
+			name: "duplicate output",
+			d: functionyaml.Descriptor{
+				Name: "widget",
+				Outputs: []functionyaml.Output{
+					{Name: "digest", Type: "string"},
+					{Name: "digest", Type: "list"},
+				},
+			},
+			wantErr: `widget: duplicate output "digest"`,
+		},
+		{
 			name: "invalid nested subcommand",
 			d: functionyaml.Descriptor{
 				Name: "widget",
@@ -402,6 +481,10 @@ func TestWrite(t *testing.T) {
 					{Name: "version", Type: "string", Default: "stable", Description: "Version spec."},
 				},
 			},
+		},
+		Outputs: []functionyaml.Output{
+			{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+			{Name: "token", Type: "string", Secret: true},
 		},
 	}
 

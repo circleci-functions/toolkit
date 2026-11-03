@@ -134,9 +134,20 @@ client.AtTeardown().StoreTestResults(ctx, "./test-results")
 ### Setting outputs
 
 An output is a value a function hands to later steps in the job. Declare each
-one under `outputs` in the function's `function.yaml`, with a `name`, a `type`
-(`string`, `bool`, `int` or `list`), and optionally a `description` and
-`secret: true`. Then set it while the function runs:
+one with a `name`, a `type` (`string`, `bool`, `int` or `list`), and optionally
+a `description` and `secret: true`. A function built with kong passes them to
+`functionyaml.Embed`, so `--describe` and each release publish them in
+`function.yaml`:
+
+```go
+kong.Parse(&cli, functionyaml.Embed(
+    functionyaml.Output{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+    functionyaml.Output{Name: "tags", Type: "list"},
+))
+```
+
+Any other function lists them under `outputs:` in its checked-in `function.yaml`.
+Then set them while the function runs:
 
 ```go
 if err := client.SetOutput(ctx, "digest", digest); err != nil {

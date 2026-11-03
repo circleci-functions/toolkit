@@ -64,6 +64,24 @@ A function built without kong sets `example:` on the flag in a checked-in
 `function.yaml` instead. `--dry-run` prints the example a release would publish,
 and fails if a required flag has no example value.
 
+### Outputs
+
+A function that sets outputs for later steps to read declares them, and each
+release publishes the declaration in `function.yaml`. With kong, pass them to
+`functionyaml.Embed`, which `--describe` prints:
+
+```go
+kong.Parse(&cli, functionyaml.Embed(
+	functionyaml.Output{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+	functionyaml.Output{Name: "tags", Type: "list"},
+))
+```
+
+A function built without kong lists them under `outputs:` in its checked-in
+`function.yaml`. A name is letters, digits, `-` and `_`, starting with a letter,
+and a type is `string`, `bool`, `int` or `list`. Set `secret: true` on a value
+that must be masked in the job's logs. See [`sdk`](sdk) for setting them.
+
 ### Pre-releases
 
 ```

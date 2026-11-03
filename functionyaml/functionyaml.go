@@ -170,10 +170,20 @@ func flagType(target reflect.Value) string {
 }
 
 // Embed adds a hidden --describe flag that prints the schema and exits
-// during Parse, before any command runs — same mechanism as VersionFlag.
-func Embed() kong.Option {
-	return kong.Embed(&describeFlag{})
+// during Parse, before any command runs — same mechanism as VersionFlag. Pass
+// the outputs the function sets, if any, to include them in the schema.
+func Embed(outputs ...Output) kong.Option {
+	return kong.OptionFunc(func(k *kong.Kong) error {
+		if err := kong.Embed(&describeFlag{}).Apply(k); err != nil {
+			return err
+		}
+		return kong.Bind(describedOutputs(outputs)).Apply(k)
+	})
 }
+
+// describedOutputs carries Embed's outputs to the --describe hook. It has a
+// type of its own so it can't collide with anything the function binds.
+type describedOutputs []Output
 
 type describeFlag struct {
 	Describe describeAction `hidden:"" help:"Print this function's schema and exit."`
@@ -183,8 +193,9 @@ type describeAction bool
 
 // BeforeReset only fires when --describe is in argv; field values aren't
 // applied yet, so d itself isn't checked here — same as VersionFlag.
-func (d describeAction) BeforeReset(app *kong.Kong) error {
+func (d describeAction) BeforeReset(app *kong.Kong, outputs describedOutputs) error {
 	desc := FromKong(app.Model)
+	desc.Outputs = outputs
 	example, err := RenderExample(desc, localRef(desc.Name))
 	if err != nil {
 		return err

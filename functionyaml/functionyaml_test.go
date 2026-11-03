@@ -162,6 +162,37 @@ func TestFromKongPointerFlag(t *testing.T) {
 	assert.Equal(t, byName["count"].Type, "int")
 }
 
+func TestFromKongSliceFlagTypes(t *testing.T) {
+	type installCmd struct {
+		Tags     []string  `help:"Tags."`
+		Packages *[]string `help:"Packages."`
+		Ports    []int     `help:"Ports."`
+		Ratios   []float64 `help:"Ratios."`
+		Toggles  []bool    `help:"Toggles."`
+		Version  string    `help:"Version."`
+	}
+	type cli struct {
+		Install installCmd `cmd:""`
+	}
+	var flags cli
+	k, err := kong.New(&flags, kong.Name("widget"))
+	assert.NilError(t, err)
+
+	d := functionyaml.FromKong(k.Model)
+	got := map[string]string{}
+	for _, f := range d.Commands["install"].Flags {
+		got[f.Name] = f.Type
+	}
+	assert.DeepEqual(t, got, map[string]string{
+		"tags":     "list",
+		"packages": "list",
+		"ports":    "[]int",
+		"ratios":   "[]float64",
+		"toggles":  "[]bool",
+		"version":  "string",
+	})
+}
+
 func TestFromKongUninterpolatedDefault(t *testing.T) {
 	type installCmd struct {
 		InstallDir string `help:"Install dir." default:"${install_dir}"`

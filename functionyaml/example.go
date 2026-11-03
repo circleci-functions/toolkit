@@ -6,7 +6,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
-	"strings"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -68,7 +67,9 @@ func rootFlags(d Descriptor) (flags []Flag, ok bool) {
 }
 
 // exampleValue converts f's example to the YAML type its flag takes, so a
-// version like "1.20" stays a string and a bool isn't quoted.
+// version like "1.20" stays a string and a bool isn't quoted. A list flag's
+// example stays one comma-separated string, since a config compiler rejects a
+// YAML list under with.
 func exampleValue(f Flag) (any, error) {
 	if len(f.Enum) > 0 && !slices.Contains(f.Enum, f.Example) {
 		return nil, fmt.Errorf("flag %q: example %q is not one of %v", f.Name, f.Example, f.Enum)
@@ -82,8 +83,6 @@ func exampleValue(f Flag) (any, error) {
 		v, err = strconv.ParseInt(f.Example, 10, 64)
 	case "float32", "float64":
 		v, err = strconv.ParseFloat(f.Example, 64)
-	case "list":
-		v = strings.Split(f.Example, ",")
 	default:
 		v = f.Example
 	}

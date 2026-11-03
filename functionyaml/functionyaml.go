@@ -143,13 +143,21 @@ func builtinFlag(f *kong.Flag) bool {
 	return t.PkgPath() == kongPkgPath
 }
 
-// flagType returns a flag's Go kind, unwrapping kong's *T fields.
+// flagType returns a flag's Go kind, unwrapping kong's *T fields. A []string is
+// a "list", the name an output uses for the same type, and any other slice is
+// "[]" plus its element kind, such as "[]int".
 func flagType(target reflect.Value) string {
 	t := target.Type()
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	return t.Kind().String()
+	if t.Kind() != reflect.Slice {
+		return t.Kind().String()
+	}
+	if t.Elem().Kind() == reflect.String {
+		return "list"
+	}
+	return "[]" + t.Elem().Kind().String()
 }
 
 // Embed adds a hidden --describe flag that prints the schema and exits

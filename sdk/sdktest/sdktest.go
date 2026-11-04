@@ -24,12 +24,14 @@ import (
 
 // Server is an in-memory stand-in for the privileged operations sdk performs.
 // It handles cache save/restore, artifact storage, and test-result storage,
-// including operations registered to run at the end of the job.
+// including operations registered to run at the end of the job, and records the
+// outputs a function sets.
 type Server struct {
 	srv         *httptest.Server
 	cache       *cacheStore
 	artifacts   *artifactStore
 	testResults *testResultStore
+	outputs     *outputStore
 }
 
 // Option configures a Server.
@@ -61,14 +63,16 @@ func NewServer(t *testing.T, opts ...Option) *Server {
 
 	as := &artifactStore{}
 	trs := &testResultStore{}
+	outs := &outputStore{values: make(map[string]any)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/step/cache/save", cs.handleSave)
 	mux.HandleFunc("/step/cache/restore", cs.handleRestore)
 	mux.HandleFunc("/step/artifacts/store", as.handleStore)
 	mux.HandleFunc("/step/test-results/store", trs.handleStore)
+	mux.HandleFunc("/step/output/set", outs.handleSet)
 
-	s := &Server{srv: httptest.NewServer(mux), cache: cs, artifacts: as, testResults: trs}
+	s := &Server{srv: httptest.NewServer(mux), cache: cs, artifacts: as, testResults: trs, outputs: outs}
 	t.Cleanup(s.srv.Close)
 	return s
 }

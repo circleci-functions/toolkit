@@ -231,6 +231,53 @@ func TestEmbedDescribeNoDefaultSubcommand(t *testing.T) {
 	assert.Assert(t, buf.Len() > 0)
 }
 
+func TestEmbedDescribeOutputs(t *testing.T) {
+	type cli struct {
+		Push struct {
+			Tags []string `example:"a,b"`
+		} `cmd:"" default:"withargs"`
+	}
+	tests := []struct {
+		name    string
+		outputs []functionyaml.Output
+	}{
+		{name: "none"},
+		{
+			name: "declared",
+			outputs: []functionyaml.Output{
+				{Name: "digest", Type: "string", Description: "Digest of the pushed image."},
+				{Name: "tags", Type: "list"},
+				{Name: "token", Type: "string", Secret: true},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var flags cli
+			k, err := kong.New(&flags, kong.Name("widget"), functionyaml.Embed(tt.outputs...))
+			assert.NilError(t, err)
+
+			var buf bytes.Buffer
+			k.Stdout = &buf
+			k.Exit = func(int) {}
+
+			_, err = k.Parse([]string{"--describe"})
+			assert.NilError(t, err)
+
+			var d functionyaml.Descriptor
+			assert.NilError(t, yaml.Unmarshal(buf.Bytes(), &d))
+			assert.DeepEqual(t, d.Outputs, tt.outputs)
+			assert.NilError(t, functionyaml.Validate(d))
+			assert.Assert(t, strings.Contains(d.Example, "tags: a,b"), d.Example)
+
+			var raw map[string]any
+			assert.NilError(t, yaml.Unmarshal(buf.Bytes(), &raw))
+			_, hasOutputs := raw["outputs"]
+			assert.Equal(t, hasOutputs, len(tt.outputs) > 0)
+		})
+	}
+}
+
 func TestEmbedDescribeAbsent(t *testing.T) {
 	type installCmd struct {
 		Version string `help:"Version." default:"stable"`

@@ -216,6 +216,8 @@ func (r *Releaser) uploadChecksums(ctx context.Context, params PublishParameters
 		Bucket: &params.Bucket,
 		Key:    &key,
 		Body:   &checksums,
+
+		Tagging: encodeTags(params.Tags),
 	})
 	return err
 }

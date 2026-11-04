@@ -6,17 +6,24 @@
 // github.com/circleci-functions/<name>/<version>/<os>/<arch>/<name> plus
 // checksums.txt + release.txt. The <os>/<arch> layout is normalized here so
 // one downloader can serve binaries regardless of source language.
+//
+// A pre-release publishes a build of HEAD as a Go pseudo-version, which the
+// catalog hides, and leaves release.txt alone so it never becomes the latest.
+// Its objects are tagged prerelease=true, which the bucket expires.
 package main
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.yaml.in/yaml/v4"
+	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 
 	"github.com/circleci-functions/toolkit/compiler"
@@ -48,9 +56,10 @@ const (
 
 // Releaser compiles a function for each configured platform and publishes it to S3.
 type Releaser struct {
-	name    string
-	version string
-	bucket  string
+	name       string
+	version    string
+	bucket     string
+	prerelease bool
 
 	platforms map[string][]string
 	client    *s3.Client
@@ -63,6 +72,10 @@ type Config struct {
 	Name    string
 	Version string
 	Bucket  string
+
+	// Prerelease publishes Version, which must be a pseudo-version, without
+	// moving release.txt, and tags every object prerelease=true.
+	Prerelease bool
 
 	// Platforms is an optional map of OS to architectures. Defaults to defaultPlatforms.
 	Platforms map[string][]string
@@ -91,6 +104,9 @@ func newReleaser(ctx context.Context, cfg Config) (Releaser, error) {
 	if err := validateVersion(cfg.Version); err != nil {
 		return Releaser{}, err
 	}
+	if cfg.Prerelease && !module.IsPseudoVersion(cfg.Version) {
+		return Releaser{}, fmt.Errorf("pre-release version %q must be a pseudo-version, for example v0.1.1-0.20261103142233-abcdef123456", cfg.Version)
+	}
 	if cfg.Bucket == "" {
 		cfg.Bucket = "circleci-functions"
 	}
@@ -111,6 +127,7 @@ func newReleaser(ctx context.Context, cfg Config) (Releaser, error) {
 		name:       cfg.Name,
 		version:    cfg.Version,
 		bucket:     cfg.Bucket,
+		prerelease: cfg.Prerelease,
 		platforms:  cfg.Platforms,
 		client:     cfg.Client,
 		baseURL:    strings.TrimSuffix(cfg.BaseURL, "/"),
@@ -126,6 +143,12 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 	}
 
 	if err := r.checkUnpublished(ctx); err != nil {
+		// A pre-release's version is its commit's, so a rerun finds it published.
+		if r.prerelease && errors.Is(err, errPublished) {
+			fmt.Printf("%s%s %s is already published\n\n", namespace, r.name, r.version)
+			fmt.Print(r.pin())
+			return nil
+		}
 		return err
 	}
 
@@ -144,13 +167,20 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 		return fmt.Errorf("describe: %w", err)
 	}
 
+	return r.publish(ctx, buildDir, functionYAML)
+}
+
+// publish uploads what Run built: the binaries, checksums.txt and function.yaml,
+// then points release.txt at the version unless it's a pre-release.
+func (r Releaser) publish(ctx context.Context, buildDir string, functionYAML []byte) error {
 	rel := releaser.NewWithClient(r.client)
 
-	err = rel.Publish(ctx, releaser.PublishParameters{
+	err := rel.Publish(ctx, releaser.PublishParameters{
 		Path:    filepath.Join(buildDir, r.name),
 		Bucket:  r.bucket,
 		App:     namespace + r.name,
 		Version: r.version,
+		Tags:    r.tags(),
 	})
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
@@ -164,9 +194,16 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 		Key:         &key,
 		Body:        bytes.NewReader(functionYAML),
 		ContentType: aws.String("text/yaml; charset=utf-8"),
+		Tagging:     encodeTags(r.tags()),
 	})
 	if err != nil {
 		return fmt.Errorf("upload function.yaml: %w", err)
+	}
+
+	if r.prerelease {
+		fmt.Printf("published pre-release %s%s %s to %s\n\n", namespace, r.name, r.version, r.bucket)
+		fmt.Print(r.pin())
+		return nil
 	}
 
 	err = rel.Release(ctx, releaser.ReleaseParameters{
@@ -181,6 +218,78 @@ func (r Releaser) Run(ctx context.Context, dryRun bool) error {
 	fmt.Printf("published %s%s %s to %s\n", namespace, r.name, r.version, r.bucket)
 	return nil
 }
+
+// tags are the S3 object tags a publish applies. The bucket expires objects
+// tagged prerelease=true.
+func (r Releaser) tags() map[string]string {
+	if !r.prerelease {
+		return nil
+	}
+	return map[string]string{"prerelease": "true"}
+}
+
+func encodeTags(tags map[string]string) *string {
+	if len(tags) == 0 {
+		return nil
+	}
+	encoded := url.Values{}
+	for k, v := range tags {
+		encoded.Add(k, v)
+	}
+	return aws.String(encoded.Encode())
+}
+
+// pin is the config that uses a pre-release.
+func (r Releaser) pin() string {
+	return fmt.Sprintf("pin it with:\n\nfunctions:\n  %s: %s%s@%s\n", r.name, namespace, r.name, r.version)
+}
+
+// pseudoVersion is the Go pseudo-version of the commit checked out in dir: one
+// patch above the newest release tag it contains, with the commit's time and
+// hash. With no release tag the base is v0.0.0, not Go's v0.0.0-<time>-<hash>
+// form, so every pre-release has the "-0." its bucket policy matches.
+func pseudoVersion(ctx context.Context, dir string) (string, error) {
+	head, err := git(ctx, dir, "log", "-1", "--format=%H %ct")
+	if err != nil {
+		return "", err
+	}
+	hash, unix, ok := strings.Cut(head, " ")
+	if !ok || len(hash) < 12 {
+		return "", fmt.Errorf("unexpected git log output %q", head)
+	}
+	seconds, err := strconv.ParseInt(unix, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("parse commit time %q: %w", unix, err)
+	}
+
+	tags, err := git(ctx, dir, "tag", "--merged", "HEAD", "--list", "v*")
+	if err != nil {
+		return "", err
+	}
+	base := "v0.0.0"
+	for _, tag := range strings.Fields(tags) {
+		if validateVersion(tag) == nil && semver.Prerelease(tag) == "" && semver.Compare(tag, base) > 0 {
+			base = tag
+		}
+	}
+	return module.PseudoVersion(semver.Major(base), base, time.Unix(seconds, 0), hash[:12]), nil
+}
+
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+var errPublished = errors.New("is already published, and a published version can't change")
 
 // checkUnpublished refuses a version whose checksums.txt is already served, so a
 // release can't replace binaries consumers have pinned. It reads from the CDN since
@@ -200,7 +309,7 @@ func (r Releaser) checkUnpublished(ctx context.Context) error {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return fmt.Errorf("%s%s %s is already published, and a published version can't change", namespace, r.name, r.version)
+		return fmt.Errorf("%s%s %s %w", namespace, r.name, r.version, errPublished)
 	case http.StatusForbidden, http.StatusNotFound:
 		return nil
 	default:
@@ -239,7 +348,9 @@ func (r Releaser) dryRun(ctx context.Context) error {
 	}
 	fmt.Printf("would publish to s3://%s/:\n", r.bucket)
 	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, r.version, "function.yaml")))
-	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, "release.txt")))
+	if !r.prerelease {
+		fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, "release.txt")))
+	}
 	fmt.Printf("  %s\n", filepath.ToSlash(filepath.Join(namespace, r.name, r.version, "checksums.txt")))
 	for goos, archs := range r.platforms {
 		for _, goarch := range archs {
@@ -324,10 +435,11 @@ func marshalDescriptor(data []byte, name, version string) ([]byte, error) {
 }
 
 type cli struct {
-	Name    string `required:"" help:"function name (e.g. setup-go)"`
-	Version string `required:"" help:"version (e.g. v0.1.0)"`
-	Bucket  string `help:"S3 bucket to publish to (default: circleci-functions)"`
-	DryRun  bool   `help:"build and write artifacts to ./dist without uploading to S3"`
+	Name       string `required:"" help:"function name (e.g. setup-go)"`
+	Version    string `xor:"version" required:"" help:"version (e.g. v0.1.0)"`
+	Prerelease bool   `xor:"version" required:"" help:"publish HEAD as a pseudo-version, without making it the latest"`
+	Bucket     string `help:"S3 bucket to publish to (default: circleci-functions)"`
+	DryRun     bool   `help:"build and write artifacts to ./dist without uploading to S3"`
 }
 
 func main() {
@@ -335,10 +447,19 @@ func main() {
 	kong.Parse(&conf)
 
 	ctx := context.Background()
+	if conf.Prerelease {
+		v, err := pseudoVersion(ctx, ".")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		conf.Version = v
+	}
 	rel, err := newReleaser(ctx, Config{
-		Name:    conf.Name,
-		Version: conf.Version,
-		Bucket:  conf.Bucket,
+		Name:       conf.Name,
+		Version:    conf.Version,
+		Bucket:     conf.Bucket,
+		Prerelease: conf.Prerelease,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

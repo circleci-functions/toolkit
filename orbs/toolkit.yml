@@ -104,3 +104,33 @@ jobs:
       - run:
           name: Build and publish
           command: task publish VERSION="$VERSION"
+
+  publish-prerelease:
+    description: >
+      Publish a build of this commit as a pre-release with `task publish-prerelease`:
+      a Go pseudo-version that the catalog hides and that never becomes the latest.
+      The job prints the `functions:` line that pins it. Run it in a workflow gated
+      on a pipeline parameter, with the functions-prerelease context.
+    parameters:
+      executor:
+        type: executor
+        description: "The executor to run on, with Go and Task."
+      cache-prefix:
+        type: string
+        description: "Prefix of the repo's Go cache keys, such as setup-go-go."
+      role_arn:
+        type: string
+        description: "The ARN of the role that publishes pre-releases, passed to setup-aws-oidc."
+        default: $FUNCTIONS_PRERELEASE_ROLE_ARN
+    executor: << parameters.executor >>
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - << parameters.cache-prefix >>-{{ checksum "go.sum" }}-
+            - << parameters.cache-prefix >>-
+      - setup-aws-oidc:
+          role_arn: << parameters.role_arn >>
+      - run:
+          name: Build and publish the pre-release
+          command: task publish-prerelease

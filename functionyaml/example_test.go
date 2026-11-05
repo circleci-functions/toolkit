@@ -1,6 +1,7 @@
 package functionyaml_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -60,6 +61,42 @@ jobs:
             retries: 3
             version: "1.20"
 `)
+}
+
+func TestRenderExampleSliceFlags(t *testing.T) {
+	var cli struct {
+		Install struct {
+			Tags  []string `example:"a,b"`
+			Ports []int    `example:"80,443"`
+		} `cmd:"" default:"withargs"`
+	}
+
+	got, err := functionyaml.RenderExample(describe(t, &cli), ref)
+	assert.NilError(t, err)
+	assert.Equal(t, got, `functions:
+  widget: github.com/circleci-functions/widget@v1.0.0
+jobs:
+  build:
+    steps:
+      - widget:
+          with:
+            ports: 80,443
+            tags: a,b
+`)
+}
+
+func TestRenderExampleKeepsListAsOneString(t *testing.T) {
+	for _, typ := range []string{"list", "slice", "[]int"} {
+		t.Run(typ, func(t *testing.T) {
+			d := functionyaml.Descriptor{
+				Name:  "widget",
+				Flags: []functionyaml.Flag{{Name: "tags", Type: typ, Example: "a,b"}},
+			}
+			got, err := functionyaml.RenderExample(d, ref)
+			assert.NilError(t, err)
+			assert.Assert(t, strings.Contains(got, "tags: a,b\n"), got)
+		})
+	}
 }
 
 func TestRenderExampleNoRootCommand(t *testing.T) {

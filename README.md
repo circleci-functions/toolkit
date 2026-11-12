@@ -78,9 +78,48 @@ becomes the latest, and `circleci function list` and `get` show it only with
 tagged `prerelease=true`, and the bucket deletes them after 30 days. Rerunning it
 on the same commit succeeds without publishing again.
 
-In CI, the orb's `publish-prerelease` job runs `task publish-prerelease`. It
-needs the `functions-prerelease` context, whose role can publish only
-pseudo-versions, from a branch, when a maintainer triggered the pipeline.
+In CI, a maintainer publishes one by triggering a pipeline on a branch with the
+boolean parameter `prerelease` set to `true`. Only maintainers can, and not from
+`main`. A function repo wires it up with a task:
+
+```yaml
+publish-prerelease:
+  desc: Build and publish this commit as a pre-release, without making it the latest
+  cmds:
+    - go tool release --name setup-go --prerelease
+```
+
+and, in `.circleci/config.yml`, a parameter that swaps the usual workflow for one
+that runs the orb's `publish-prerelease` job:
+
+```yaml
+parameters:
+  prerelease:
+    type: boolean
+    default: false
+
+workflows:
+  test-publish:
+    when:
+      not: << pipeline.parameters.prerelease >>
+    jobs:
+      # ...as before
+
+  prerelease:
+    when: << pipeline.parameters.prerelease >>
+    jobs:
+      - test
+      - build
+      - toolkit/publish-prerelease:
+          name: publish-prerelease
+          executor: go
+          cache-prefix: setup-go-go
+          requires: [test, build]
+          context: [functions-prerelease]
+```
+
+The job prints the `functions:` line that pins the pre-release. Each function's
+`RELEASE.md` says how to trigger one.
 
 ## `cmd/release-pr`
 

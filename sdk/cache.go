@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -122,13 +123,23 @@ func (c *Client) do(ctx context.Context, path string, body any) (*serverResponse
 		return nil, ErrUnsupported
 	}
 
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("sdk: read response: %w", err)
+	}
+
 	var result serverResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("sdk: decode response: %w", err)
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, fmt.Errorf("sdk: decode response: %w", err)
+		}
 	}
 
 	// Any 2xx is a success: a deferred step is accepted with 202, not 200.
 	if resp.StatusCode >= http.StatusMultipleChoices {
+		if result.Error == "" {
+			result.Error = resp.Status
+		}
 		return nil, &ServerError{Msg: result.Error}
 	}
 

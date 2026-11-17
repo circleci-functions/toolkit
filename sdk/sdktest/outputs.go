@@ -57,8 +57,7 @@ func (o *outputStore) handleSet(w http.ResponseWriter, r *http.Request) {
 	o.values[req.Name] = value
 	o.mu.Unlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte("{}"))
+	w.WriteHeader(http.StatusOK)
 }
 
 // decodeOutput turns raw into the Go type SetOutput took it as, refusing what

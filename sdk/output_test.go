@@ -33,7 +33,7 @@ func TestSetOutput_Success(t *testing.T) {
 				var err error
 				body, err = io.ReadAll(r.Body)
 				assert.NilError(t, err)
-				fakepluginserver.JSONHandler(t, http.StatusOK, map[string]string{}).ServeHTTP(w, r)
+				w.WriteHeader(http.StatusOK)
 			}))
 			client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
 
@@ -96,6 +96,20 @@ func TestSetOutput_ServerError(t *testing.T) {
 			assert.Equal(t, svrErr.Msg, tt.msg)
 		})
 	}
+}
+
+func TestSetOutput_ServerErrorWithoutBody(t *testing.T) {
+	srv := fakepluginserver.New(t)
+	srv.SetOutput(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
+
+	err := client.SetOutput(context.Background(), "out", "sha256:abc")
+
+	var svrErr *ServerError
+	assert.Assert(t, errors.As(err, &svrErr))
+	assert.Equal(t, svrErr.Msg, "500 Internal Server Error")
 }
 
 func TestSetOutput_NoServer(t *testing.T) {

@@ -64,8 +64,11 @@ rotation.
 | `client.StoreTestResults(ctx, path)` | `error` | Store XML test results for the web app |
 | `client.AtTeardown().StoreArtifacts(ctx, path, destination)` | `error` | Register an artifact store to run at the end of the job |
 | `client.AtTeardown().StoreTestResults(ctx, path)` | `error` | Register a test-result store to run at the end of the job |
+| `client.SetOutput(ctx, name, value)` | `error` | Set an output for later steps to read |
 
 `sdk.ErrNoServer` is returned when the function is not running inside a CircleCI job. Use `errors.Is(err, sdk.ErrNoServer)` to detect this.
+
+`sdk.ErrUnsupported` is returned when the job's build agent is older than the SDK and does not offer the operation. Use `errors.Is(err, sdk.ErrUnsupported)` to carry on without it.
 
 A job shows a cache step as `Saving cache` or `Restoring cache`. Handle more than
 one cache and those steps become indistinguishable, so name them:
@@ -128,6 +131,48 @@ client.AtTeardown().OnFail().StoreArtifacts(ctx, "./logs", "logs")
 client.AtTeardown().StoreTestResults(ctx, "./test-results")
 ```
 
+### Setting outputs
+
+An output is a value a function hands to later steps in the job. Declare each
+one under `outputs` in the function's `function.yaml`, with a `name`, a `type`
+(`string`, `bool`, `int` or `list`), and optionally a `description` and
+`secret: true`. Then set it while the function runs:
+
+```go
+if err := client.SetOutput(ctx, "digest", digest); err != nil {
+    return fmt.Errorf("set output: %w", err)
+}
+if err := client.SetOutput(ctx, "tags", []string{"api:1.2.3", "api:latest"}); err != nil {
+    return fmt.Errorf("set output: %w", err)
+}
+```
+
+The value is a `string`, `bool`, `int` or `[]string`, matching the declared type
+(`list` is a `[]string`); `SetOutput` rejects any other Go type before sending
+it. Setting a name again replaces its value. The job refuses a name that is not
+declared, a value of the wrong type, or a string holding a NUL byte, and
+`SetOutput` returns the reason as an `*sdk.ServerError`.
+
+A `secret: true` output is masked in the job's logs once it is set. As with a
+job's environment variables, a value shorter than 4 characters, or exactly
+`true` or `false`, is not masked.
+
+Kong splits a `[]string` flag value on commas by default, so a list item that
+contains a comma arrives as two items when a step passes the list to a function.
+
+A later step reads an output with `${{ steps.<id>.outputs.<name> }}`, where
+`<id>` is the `id` of the function's step.
+
+Tolerate `ErrNoServer` and `ErrUnsupported` if the function should still work
+outside a job, or on an agent that predates outputs:
+
+```go
+err := client.SetOutput(ctx, "digest", digest)
+if err != nil && !errors.Is(err, sdk.ErrNoServer) && !errors.Is(err, sdk.ErrUnsupported) {
+    return fmt.Errorf("set output: %w", err)
+}
+```
+
 ## Testing
 
 `sdktest` gives you an in-memory cache and a sandbox, and needs nothing beyond
@@ -158,7 +203,13 @@ partitions its keys the way you intended. `srv.StoredArtifacts()` and
 `srv.StoredTestResultPaths()` return the artifacts and test-result paths stored
 so far. For deferred stores, `srv.PendingArtifactStores()` and
 `srv.PendingTestResultStores()` report what is registered before `EndJob` runs
-it.
+it. `srv.Outputs()` returns the outputs the function set, by name, with the Go
+type each was set with.
+
+The server refuses a value a job would refuse, so a function can't pass its
+tests with an output that fails in a job. It does not know your `function.yaml`,
+so it accepts any name: assert on the names to check they match what you
+declare.
 
 The in-memory cache mirrors CircleCI's behaviour:
 

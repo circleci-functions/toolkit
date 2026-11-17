@@ -126,6 +126,31 @@ func TestErrNoServer(t *testing.T) {
 	})
 }
 
+func TestErrUnsupported(t *testing.T) {
+	ctx := context.Background()
+	operations := map[string]func(*Client) error{
+		"SaveCache": func(c *Client) error { return c.SaveCache(ctx, "k", []string{"."}) },
+		"RestoreCache": func(c *Client) error {
+			_, err := c.RestoreCache(ctx, []string{"k"})
+			return err
+		},
+		"StoreArtifacts":   func(c *Client) error { return c.StoreArtifacts(ctx, ".", "") },
+		"StoreTestResults": func(c *Client) error { return c.StoreTestResults(ctx, ".") },
+		"SetOutput":        func(c *Client) error { return c.SetOutput(ctx, "out", "value") },
+	}
+
+	for name, op := range operations {
+		t.Run(name, func(t *testing.T) {
+			srv := fakepluginserver.New(t)
+			client := newWithSocketPath(fakepluginserver.SocketPath(srv.Dir))
+
+			err := op(client)
+			assert.Assert(t, errors.Is(err, ErrUnsupported), "got %v", err)
+			assert.Assert(t, !errors.Is(err, ErrNoServer))
+		})
+	}
+}
+
 func TestSaveCache_ContextDeadline(t *testing.T) {
 	srv := fakepluginserver.New(t)
 	srv.SaveCache(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

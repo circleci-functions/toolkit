@@ -28,6 +28,12 @@ const (
 // tell that case apart from a cache miss or a real error.
 var ErrNoServer = errors.New("sdk: not running inside a CircleCI job")
 
+// ErrUnsupported is returned when the build agent running the job doesn't offer
+// the operation, because it is older than the SDK. Use errors.Is(err,
+// ErrUnsupported) to carry on without it, as a function that must also run on
+// older agents will want to.
+var ErrUnsupported = errors.New("sdk: the CircleCI build agent in this job does not support this operation")
+
 // Client performs privileged operations on behalf of the current CircleCI
 // job.
 type Client struct {
